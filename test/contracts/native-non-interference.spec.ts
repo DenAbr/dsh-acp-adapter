@@ -61,7 +61,12 @@ describe('native DSH non-interference contract', () => {
             ? (...segments: string[]) => [home, ...segments].join('/')
             : undefined,
       inject: (deps: string[], callback: (ctx: unknown) => void) => {
-        if (!deps.includes('settings') && !deps.includes('configEditor')) callback({ get: context.get, on: context.on })
+        if (
+          !deps.includes('settings') &&
+          !deps.includes('configEditor') &&
+          deps.every((name) => context.get(name) !== undefined)
+        )
+          callback({ get: context.get, on: context.on })
       },
       on: () => () => undefined,
       effect: () => undefined,
