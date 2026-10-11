@@ -6,6 +6,7 @@ import path from 'node:path'
 import { createUserMessage, markAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { AcpProfileAdapter } from '../../../src/host/composition/profile-adapter.ts'
+import { AcpForkPreDispatchError } from '../../../src/runtime/session/session-runtime.ts'
 import type { AcpAgentConfig } from '../../../src/domain/session/agent-config.ts'
 import type { AcpProfileRuntime } from '../../../src/host/composition/profile-adapter.ts'
 import type { SessionLike, SessionEventLike } from '../../../src/domain/session/current-step-admission.ts'
@@ -50,6 +51,7 @@ function runtimeFactory(
   counts: { starts: number; forks: number; prompts: number },
   fork?: (parent: string) => Promise<void>,
   startError?: Error,
+  preDispatchError?: AcpForkPreDispatchError,
 ): (options: unknown) => AcpProfileRuntime {
   return () => {
     let acpSessionId = 'agent-parent'
@@ -73,7 +75,12 @@ function runtimeFactory(
     }
     if (fork !== undefined) {
       runtime.fork = async (parent, _signal, _expected, beforeDispatch) => {
-        await beforeDispatch?.()
+        if (preDispatchError !== undefined) throw preDispatchError
+        try {
+          await beforeDispatch?.()
+        } catch (error) {
+          throw new AcpForkPreDispatchError('ACP_FORK_INTENT_FAILED', error)
+        }
         counts.forks += 1
         await fork(parent)
         acpSessionId = 'agent-child'
@@ -170,6 +177,109 @@ function sidecarProxy(
 }
 
 describe('provider adapter ACP fork boundary', () => {
+  it.each([
+    ['ACP_FORK_UNSUPPORTED', 'agent-does-not-advertise-fork'],
+    ['ACP_FORK_PRECONDITION_FAILED', 'parent-binding-mismatch'],
+  ] as const)('uses a typed %s failure for a safe blank fallback', async (code, reason) => {
+    const { root, sidecar } = await harness()
+    try {
+      const sessions = new Map<string, FixtureSession>()
+      const parentMessage = user('parent')
+      const parent = makeSession(parentMessage)
+      sessions.set('parent', parent)
+      await drain(
+        new AcpProfileAdapter(
+          'test',
+          profile,
+          seam(),
+          (id) => sessions.get(id),
+          ledgerFor(sidecar),
+          undefined,
+          runtimeFactory({ starts: 0, forks: 0, prompts: 0 }),
+          sidecar,
+        ).stream(request('parent', parentMessage)),
+      )
+      const markedParent = await parentWithReplay(sidecar, 'parent', parent)
+      sessions.set('parent', markedParent)
+      const childMessage = user('child')
+      sessions.set('child', childFromParent(markedParent, 'parent', childMessage))
+      const counts = { starts: 0, forks: 0, prompts: 0 }
+      await drain(
+        new AcpProfileAdapter(
+          'test',
+          profile,
+          seam(),
+          (id) => sessions.get(id),
+          ledgerFor(sidecar),
+          undefined,
+          runtimeFactory(counts, async () => undefined, undefined, new AcpForkPreDispatchError(code)),
+          sidecar,
+        ).stream(request('child', childMessage)),
+      )
+      expect(counts).toEqual({ starts: 1, forks: 0, prompts: 1 })
+      expect(
+        (await sidecar.list('child' as never)).some(
+          (entry) => entry.kind === 'session-fork' && entry.data.outcome === 'blank' && entry.data.reason === reason,
+        ),
+      ).toBe(true)
+    } finally {
+      await sidecar.dispose()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['ACP_FORK_UNSUPPORTED', 'ACP_FORK_PRECONDITION_FAILED', 'ACP_FORK_INTENT_FAILED: remote rejection'])(
+    'keeps a dispatched fork outcome unknown when its error text is %s',
+    async (message) => {
+      const { root, sidecar } = await harness()
+      try {
+        const sessions = new Map<string, FixtureSession>()
+        const parentMessage = user('parent')
+        const parent = makeSession(parentMessage)
+        sessions.set('parent', parent)
+        await drain(
+          new AcpProfileAdapter(
+            'test',
+            profile,
+            seam(),
+            (id) => sessions.get(id),
+            ledgerFor(sidecar),
+            undefined,
+            runtimeFactory({ starts: 0, forks: 0, prompts: 0 }),
+            sidecar,
+          ).stream(request('parent', parentMessage)),
+        )
+        const markedParent = await parentWithReplay(sidecar, 'parent', parent)
+        sessions.set('parent', markedParent)
+        const childMessage = user('child')
+        sessions.set('child', childFromParent(markedParent, 'parent', childMessage))
+        const counts = { starts: 0, forks: 0, prompts: 0 }
+        await expect(
+          drain(
+            new AcpProfileAdapter(
+              'test',
+              profile,
+              seam(),
+              (id) => sessions.get(id),
+              ledgerFor(sidecar),
+              undefined,
+              runtimeFactory(counts, async () => {
+                throw new Error(message)
+              }),
+              sidecar,
+            ).stream(request('child', childMessage)),
+          ),
+        ).rejects.toMatchObject({ code: 'ACP_FORK_FAILED' })
+        expect(counts).toEqual({ starts: 0, forks: 1, prompts: 0 })
+        expect((await sidecar.readRecoveryState('child' as never))?.kind).toBe('outcome-unknown')
+        expect(await sidecar.readLatestBinding('child' as never)).toBeUndefined()
+      } finally {
+        await sidecar.dispose()
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+
   it.each([false, true])(
     'uses ACP fork only at first dispatch and gives the child an independent binding (legacy registry references: %s)',
     async (legacy) => {
@@ -549,9 +659,10 @@ describe('provider adapter ACP fork boundary', () => {
       const childMessage = user('child')
       sessions.set('child', childFromParent(markedParent, 'parent', childMessage))
       const counts = { starts: 0, forks: 0, prompts: 0 }
+      const intentError = new Error('intent write failed')
       const broken = sidecarProxy(sidecar, {
         writeRecoveryState: async (state) => {
-          if (state.cause === 'fork-intent') throw new Error('intent write failed')
+          if (state.cause === 'fork-intent') throw intentError
           await sidecar.writeRecoveryState(state)
         },
       })
@@ -568,7 +679,10 @@ describe('provider adapter ACP fork boundary', () => {
             broken,
           ).stream(request('child', childMessage)),
         ),
-      ).rejects.toMatchObject({ code: 'ACP_FORK_INTENT_FAILED' })
+      ).rejects.toMatchObject({
+        code: 'ACP_FORK_INTENT_FAILED',
+        cause: { code: 'ACP_FORK_INTENT_FAILED', cause: intentError },
+      })
       expect(counts).toEqual({ starts: 0, forks: 0, prompts: 0 })
     } finally {
       await sidecar.dispose()

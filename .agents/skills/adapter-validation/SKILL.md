@@ -13,6 +13,7 @@ Choose evidence by the surface reached:
 - Public types, imports or configuration: the owning typecheck and compatibility checks.
 - Build, exports, workers or installation: build and the relevant built-artifact or install smoke.
 - Native UI or Host integration: the owning keyless protocol/browser scenario. Inspect the selected test count; use this repository's actual argument forwarding.
+- Optional capabilities: check the affected default-off, enabled, disabled-again, and remount boundaries where behavior changes. Observe tool admission, live capability revocation, UI visibility and owned resource cleanup separately from module imports; reuse existing evidence for unchanged boundaries. Do not certify every optional bundle from one generic bridge scenario.
 - Provider behavior: existing real Agent evidence within its recorded scope, or a newly authorized bounded run. Keyless fixtures cannot certify a real Agent.
 
 Before using a command, inspect whether it builds, cleans, starts a Host or consumes model quota. `npm pack` runs `prepack`; `check:stale-build` builds as part of its probe. Coordinate shared local resources as required by [AGENTS.md](../../../AGENTS.md).

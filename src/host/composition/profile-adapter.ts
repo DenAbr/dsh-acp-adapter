@@ -28,6 +28,7 @@ import type { AcpProbeCacheEntry } from './llm-stub.ts'
 import type { AcpStubAgentConfig } from '../../domain/session/agent-config.ts'
 import type { SubprocessSeamResolution } from '../../runtime/process/subprocess.ts'
 import {
+  AcpForkPreDispatchError,
   AcpSessionRefreshAbortedError,
   AcpSessionRefreshRetryError,
   AcpSessionRuntime,
@@ -625,7 +626,11 @@ export interface AcpProfileRuntime {
   /** Negotiate capabilities without creating session/new. */
   initialize?(signal?: AbortSignal): Promise<void>
   start(signal?: AbortSignal): Promise<void>
-  /** Fork a parent ACP session; absent means the Agent cannot fork. */
+  /**
+   * Fork a parent ACP session; absent means the Agent cannot fork.
+   * Only AcpForkPreDispatchError permits a known pre-dispatch fallback;
+   * the runtime wraps beforeDispatch failures once and preserves their cause.
+   */
   fork?(
     parentSessionId: string,
     signal?: AbortSignal,
@@ -881,7 +886,7 @@ export class AcpProfileAdapter extends LlmAdapter {
     this.runtimeOwners.set(next, session.identity ?? session)
     let forkDispatched = false
     try {
-      if (next.fork === undefined) throw new Error('ACP_FORK_UNSUPPORTED')
+      if (next.fork === undefined) throw new AcpForkPreDispatchError('ACP_FORK_UNSUPPORTED')
       await next.fork(
         binding.agentSessionId,
         signal,
@@ -2355,37 +2360,35 @@ export class AcpProfileAdapter extends LlmAdapter {
                       // The runtime has initialized and completed all pre-RPC
                       // checks. Persist intent immediately before session/fork so
                       // unsupported/precondition failures cannot leave a false gate.
-                      try {
-                        await durableSidecar.writeRecoveryState({
-                          dshSessionId: sessionKey as never,
-                          kind: 'outcome-unknown',
-                          cause: 'fork-intent',
-                          detail: 'ACP session/fork was dispatched; its child binding is not durable yet',
-                          provider: options.provider,
-                          acpSessionId: parentBinding.agentSessionId,
-                          generation: parentBinding.generation,
-                          updatedAt: Date.now(),
-                        })
-                      } catch (error) {
-                        throw new Error(
-                          `ACP_FORK_INTENT_FAILED: ${error instanceof Error ? error.message : String(error)}`,
-                        )
-                      }
+                      await durableSidecar.writeRecoveryState({
+                        dshSessionId: sessionKey as never,
+                        kind: 'outcome-unknown',
+                        cause: 'fork-intent',
+                        detail: 'ACP session/fork was dispatched; its child binding is not durable yet',
+                        provider: options.provider,
+                        acpSessionId: parentBinding.agentSessionId,
+                        generation: parentBinding.generation,
+                        updatedAt: Date.now(),
+                      })
                     },
                   )
                   forked = true
                   forkOutcome = 'inherited'
                   forkReason = 'inherited'
                 } catch (error: unknown) {
-                  if (error instanceof Error && error.message === 'ACP_FORK_UNSUPPORTED') {
+                  if (error instanceof AcpForkPreDispatchError && error.code === 'ACP_FORK_UNSUPPORTED') {
                     forkReason = 'agent-does-not-advertise-fork'
-                  } else if (error instanceof Error && error.message === 'ACP_FORK_PRECONDITION_FAILED') {
+                  } else if (
+                    error instanceof AcpForkPreDispatchError &&
+                    error.code === 'ACP_FORK_PRECONDITION_FAILED'
+                  ) {
                     forkReason = 'parent-binding-mismatch'
-                  } else if (error instanceof Error && error.message.startsWith('ACP_FORK_INTENT_FAILED')) {
+                  } else if (error instanceof AcpForkPreDispatchError && error.code === 'ACP_FORK_INTENT_FAILED') {
                     await self.releaseRuntime(runtimeKey, runtime)
                     throw new LlmError(
                       'ACP fork intent could not be persisted; no remote fork was sent',
                       'ACP_FORK_INTENT_FAILED',
+                      { cause: error },
                     )
                   } else {
                     await self.releaseRuntime(runtimeKey, runtime)

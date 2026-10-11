@@ -6,9 +6,51 @@
 
 ## 库存统计的含义
 
-固定版本的源码审计记录为：`packages/experimental` 下 44 个 package manifest 均声明 public，其中 11 个具有可选组合包入口；本轮没有逐包核验 npm Registry 的实际发布可用性。44 是包数量，包含底层 service、tool、provider、Remote 和 UI 子包，不能解释为 44 个 GUI 开关，也不证明每个包均与 ACP 兼容。
+2026-10-11 完整清点固定版本的 `packages/experimental`：44 个 package manifest 均声明 public，其中 11 个具有可选组合包入口，连同其内部实验包共 28 包；剩余 16 包分为七类高级能力。本轮没有逐包核验 npm Registry 的实际发布可用性。44 是包数量，包含底层 service、tool、provider、Remote 和 UI 子包，不能解释为 44 个 GUI 开关，也不证明每个包均与 ACP 兼容。
 
-11 个组合包入口为 `agent-team-profile`、`voice-input-bundle`、`auto-review`、`inspector-profile`、`tool-worktree`、`cot-translation-bundle`、`terminal-bundle`、`session-search`、`session-titles-bundle`、`badge-skill-bundle`、`ralph-bundle`。本页仅对下面九个领域作采用判断；Teams、Badge、Inspector 和外部子任务的完整兼容性不由本页验收背书。
+下表的 11 个组合包在官方所有 shipped profile template 中均默认关闭，用户沿用原生 Plugins 页选择。包名省略 `@deepseek-ai/dsh-experimental-`；内部包使用源码目录名。依据为官方 [optional 列表及默认 profile](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/boot/app-boot/src/profile.ts#L178) 和各组合包的 `cordis.patch.yml`。此表覆盖完整库存，下面的专题段落解释必要边界。
+
+| 功能 / 官方入口                     | 所含实验包（合计 28）                                                                                         | 启用后由谁提供能力                                             | ACP 采用与用户负担                                                                                              | 证据范围                                                                        |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Agent Teams / `agent-team-profile`  | agent-team-profile、agent-team、tool-agent-team、client-ui-agent-team（4）                                    | 官方团队、工具、名册、任务板和导航；ACP 补成员模式、模型与审批 | 复用原生入口；无需再选 ACP Teams 开关。默认 fresh context，也可按官方 fork 能力继承已完成的父轮次；保留审批边界 | 已有 keyless Teams 场景；本轮另核启停边界，非真实 Agent 全矩阵                  |
+| 思考翻译 / `cot-translation-bundle` | cot-translation-bundle、translator、client-ui-cot-translation（3）                                            | 官方 translator、持久译文与 reasoning renderer                 | 直接作用于 ACP 归一化思考，无第二套 renderer 或模型路由                                                         | Chromium/Host 通过；loopback 翻译服务，不证明外网质量                           |
+| 语音输入 / `voice-input-bundle`     | voice-input-bundle、speech-to-text、speech-to-text-sensevoice、api-speech-to-text、client-ui-voice-input（5） | 官方识别器、Remote 和普通输入栏                                | 转写进入原生草稿，用户审阅后发送；无需 ACP 语音配置。模型准备、设备权限仍属官方语音功能的使用成本               | Chromium 虚拟麦及模拟识别器通过；SenseVoice 下载/推理、物理麦与 Electron 未验收 |
+| 历史检索 / `session-search`         | session-search、tool-session-query（2）                                                                       | 官方隔离查询服务、SQLite 索引与五个工具；索引按首次搜索打开    | 经现有 MCP 桥、workspace 授权和原生结果，无新索引或搜索设置                                                     | keyless Host 五工具、跨 workspace 拒绝及当前 step 排除通过                      |
+| 持久终端 / `terminal-bundle`        | terminal-bundle、tool-terminal（2）                                                                           | 官方 PTY、平台 shell、owner 与六个工具                         | 复用工具桥、原生审批及终端入口，无独立 ACP 终端选择                                                             | keyless Host PTY、跨 owner 拒绝、Ask 拒绝和取消通过                             |
+| Worktree / `tool-worktree`          | tool-worktree、worktree（2）                                                                                  | 官方 Git checkout、目录分配与 `create_worktree`                | ACP 通过保留上下文的 `session/fork` 接续；不支持 fork 时在 Git/cwd 副作用前拒绝，不要求用户手动重绑             | 真实 Git、跨进程 fork 与零副作用拒绝的 keyless Host 通过                        |
+| Ralph / `ralph-bundle`              | ralph-bundle、tool-ralph（2）                                                                                 | 官方 workflow、spawn、结构化 handoff 和工具                    | 沿父路由创建 fresh ACP 子会话，无新增模型路由；仅按人类明确要求使用 Ralph                                       | keyless Host 两轮 fresh 子会话、handoff、取消与排空通过                         |
+| Badge / `badge-skill-bundle`        | badge-skill-bundle、skill-badge（2）                                                                          | 官方 skill 提示贡献与已有 skill 加载入口                       | 可沿现有 DSH skill/MCP 链路复用；不复制到 Agent 私有目录，不增加同步或技能选择菜单                              | 源码核对，未作 Badge 专项运行验收                                               |
+| Inspector / `inspector-profile`     | inspector-profile、inspector、session-inspector（3）                                                          | 官方 Worker、采集服务、路由与原生 Session 检查                 | 可检查原生 Session/请求；ACP 私有协议、绑定及 dispatch 仍在 ACP 诊断中，不承诺原生 Inspector 包含全部 ACP 数据  | 源码核对，未作 Inspector 专项运行验收                                           |
+| 自动标题 / `session-titles-bundle`  | session-titles-bundle、session-title-all-prompts-llm（2）                                                     | 官方标题 service 与 LLM 辅助调用                               | 默认继承 ACP route 时不兼容；另配原生模型会增加配置/凭据负担，因此本插件不默认采用、不隐式代理                  | 源码确认辅助请求拒绝；不是功能通过                                              |
+| Auto Review / `auto-review`         | auto-review（1）                                                                                              | 官方进程级 Auto preset 与逐工具 LLM 风险评审                   | 当前 reviewer 调用身份不满足 ACP 会话准入；不能把既有“自动批准”称为风险评审兼容。原生选择器的适用性缺口见下文   | 源码确认不兼容；不是功能通过                                                    |
+
+图像是跨功能的 ACP 能力判定，不是第 12 个实验开关：仅在准确调用者、Session、模型、generation 和有效连接同时确认后，向原生工具声明图片输入能力。上传图片沿原有入口；这不等于 Browser/Computer Use provider 已验收。
+
+其余 16 包不在上述 11 个原生 optional 入口中，默认组合没有挂载，也没有生产值导入。它们需要高级部署显式组合，不能由“都在 experimental 目录”推导成默认功能。
+
+| 高级能力（合计 16 包） | 完整源码目录清单                                                                                               | 加载及采用判断                                                                                                |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Hooks（3）             | hook-protocol、hooks-claude-code、hooks-codex                                                                  | 协议库及显式 hook 插件；不默认改写外部 Agent 的 hook 或权限。实际 npm 名为 `dsh-hook-protocol`、`dsh-hooks-*` |
+| Claude Code Mods（2）  | claude-code-mods、client-ui-claude-code-mods                                                                   | 显式 service/UI 与 mod 注册；不自动修改现有 ACP 安装                                                          |
+| Browser Use（4）       | browser-use-runtime、browser-use-chrome-devtools-mcp、browser-use-playwright-mcp、browser-use-stagehand-native | 显式 provider，部分按 Session 懒启动；可继续评估原生工具桥，Stagehand 的独立模型配置有额外成本，不默认引入    |
+| Computer Use（2）      | computer-use-cua-driver-mcp、computer-use-cua-driver-native                                                    | 显式 provider；native 挂载时创建 SDK/连接，关闭时取消并清理。只有图片判定单测，未验真实 provider              |
+| Python PTC（1）        | ptc-runtime-python                                                                                             | 显式替换 `ptcRuntime`；默认 PTC 是非实验 Node backend。不为 ACP 增加 Python 安装或 backend 选择               |
+| Webhook（2）           | webhook、webhook-github                                                                                        | 显式规则、service 和 HTTP route；需要部署/认证配置，不默认开放后台入口。实际 npm 名为 `dsh-webhook*`          |
+| Webworker（2）         | webworker-packer、webworker-runtime                                                                            | 构建 API / `createWorkerHost`；不是普通开关。不能把浏览器 worker 当成本地 ACP stdio 进程环境                  |
+
+这七类为源码评估，没有真实 provider/workflow 运行背书。默认 Sandbox 也是非实验 sandbox 系列，不属于这 44 包。
+
+## 条件加载的准确边界
+
+结论是：**官方可选服务按启用状态激活，适配器的通用兼容代码随插件载入；不能声称每个适配模块都按实验开关懒加载。**
+
+1. 安装不等于启用。官方 profile 只组合已选 bundle；原生开关添加/移除其 patch layer，保留安装依赖。Loader 在 disabled 判定后才进入 import/mount，Cordis 在所需服务齐备后才激活。客户端仅发现有效 fiber 的模块，并随 manifest 删除旧 fiber。未启用的翻译器、语音模型、PTY registry、搜索索引、Ralph workflow 或 Inspector Worker 不由适配器创建。
+2. 导入不等于运行。审查起点 `94977fd` 的 127 个 TypeScript 文件中，实验包引用为五个 Teams 类型导入、零个运行时导入；Hooks/Webhook 的非 experimental 前缀名称另行核对。生产 dependencies 和 `cordis.patch.yml` 不安装或开启这些能力。该版构建产物也没有实验包运行时导入；开发依赖与 E2E 安装锚点不属于产品入口。
+3. 通用 ACP MCP 桥、图片判定、目录保护和会话观察随适配器载入。工具桥只消费当前准入 schema 与实际 scoped registry 的交集；工具或 owner 撤销后旧 lease 失效。目录保护还负责核心 `working_directory`，即使 Worktree 实验关闭也必须保留。不能为追求表面上的“全懒加载”关闭这些安全边界。
+4. 客户端当前是单个 bundle，Teams 组件代码/CSS 也在其中。关闭功能不会卸掉已经导入的字节；是否显示入口、订阅业务状态及执行操作要单独核对。缓存投影不证明插件仍启用，本轮发现的 Teams 热关闭残留按官方 UI contribution 生命周期修复，见下方新增验收记录。
+5. 无 HMR 的部署可能返回 `restart-required`，不能承诺开关立即清理运行资源。`dump-config-schema` 可导入已组成但被 disabled 的 row 读取 schema，仍不 mount；未选 bundle 不产生这些 row。Node/browser 模块缓存也不会因关闭而释放全部代码。
+
+源码依据：[profile 组合](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/boot/app-boot/src/profile.ts#L739)、[原生开关](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/boot/plugin-manager/src/index.ts#L476)、[Loader](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/vendor/loader/src/config/entry.ts#L111)、[客户端模块](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/client/modules/src/index.ts#L981)、[schema 诊断例外](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/boot/app-boot/src/config-schema/collect.ts#L201)。这是完整入口的源码覆盖，运行证据按上表区分；已有 Schedule 实际启停和通用 lease 撤销用例不能替代全部 11 组合包的 on/off 验收。
 
 ## 第一阶段：思考翻译、语音输入、搜索与持久终端
 
@@ -46,6 +88,8 @@ Worktree 的准入保护见 [working-directory-guard](../src/host/composition/wo
 
 这里的原生 Auto Review 使用 LLM 对每项工具操作作风险评审；现有 ACP Host Auto approval 仅决定工具桥是否额外请求人工确认，不提供该 LLM 评审能力，两者不能互称兼容。
 
+关闭默认开关不等于已解决启用后的体验：Auto 本身的权限组合与 ACP 投影一致，原生选择器仍会保留它，idle/运行中选择均可能触发无 ACP 准入身份的 reviewer，最终拒绝工具正文。恢复三选、全局 preset 及非实验 `/compact` 的同类辅助调用限制，完整记录于[用户决策成本复核](dsh-0.2.1-optimization.md#用户决策成本复核2026-10-11)；本轮没有通过额外模型配置掩盖这些缺口。
+
 标题与 Auto 的请求不具有正常 ACP AgentLoop 的调用身份。保持辅助请求拒绝和真实主会话边界，比额外维护一个隐式模型代理更符合当前产品职责。未来若官方增加按 session 的可用性及 reviewer 路由 seam，再单独评估；本轮不靠修改原生 preset 来掩盖不兼容。
 
 ## Session 记录与持续状态
@@ -54,9 +98,11 @@ Worktree 的准入保护见 [working-directory-guard](../src/host/composition/wo
 
 ## 可复用验收与结果
 
+本节与下一节记录此前实验功能实现至 `94977fd` 的历史证据；下方新增复核单独记录本次 Teams/fork 修复。历史 tarball/hash 不代表本次修复后的产物。
+
 用例由隔离 Host 挂载精确 published 官方 bundle；scaffold 从其 npm 安装解析 bundle 路径并核验版本和 patch。Host 安装图仍复用固定源码构建模块，因此这些用例属于真实 UI/Host 集成证据，不替代完整 npm Host 安装冒烟。ACP 子进程是确定性协议夹具，无真实模型调用。共享构建、Host 和浏览器执行由 root 串行安排。
 
-2026-10-11 本机输入为 macOS、Node `24.19.0`、pnpm `10.7.0`、精确 DSH `0.2.1-alpha.2` 和上述 `d743267` 源码 scaffold。CoT、Voice、Ralph 的本轮实际 UI/Host 证据来自 Chromium。UI 验证之后的产品改动限于 Worktree/cwd handoff、其 pending UI 与 guard，不影响这三项用例所用输入和路径，因此复用已经通过的三项证据；并未因最终构建或新 commit 重复运行。
+此前验收的本机输入为 macOS、Node `24.19.0`、pnpm `10.7.0`、精确 DSH `0.2.1-alpha.2` 和上述 `d743267` 源码 scaffold。CoT、Voice、Ralph 的实际 UI/Host 证据来自 Chromium。截至代码提交 `bc09f89`，UI 验证之后的产品改动限于 Worktree/cwd handoff、其 pending UI 与 guard，不影响这三项用例所用输入和路径，因此复用已经通过的三项证据；并未因构建或新 commit 重复运行。
 
 | 领域               | 拥有验收的文件与断言                                                                                                                                                                                                                                                | 本轮结果                                                                                                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -89,4 +135,10 @@ CoT/Voice 首跑揭示了三个夹具假设：新 thought 到达前按 `.last()`
 
 此次 CI 从创建到结束为 11 分 59 秒。平台兼容 job 耗时 Linux 3 分 33 秒、macOS 3 分 8 秒、Windows 5 分 2 秒；UI 分片分别 7 分 24 秒、11 分 10 秒、11 分 47 秒。它记录本次 runner、缓存和输入下的实际耗时，不构成端到端发布耗时承诺。
 
-CI 收口另修正两处测试夹具：native non-interference contract 的 fake `inject` 现在只在依赖存在时执行回调，定向 2 项通过；unfinished-tool 用例等待原生 process disclosure 可操作后再展开，并给第一轮失败补齐现场捕获，定向 1 项及最终 CI 均通过。后者在本机复现了原失败，原生按钮可以先可见、再因异步 ACP activity 投影变为可展开；仅等待 visible 会跳过点击。两项修正均保留业务断言，未修改产品行为。产品产物自上述 Stop/cwd 修复后保持不变，继续复用已通过的构建和独立安装证据；本节之后的文档提交不重跑相同输入。
+该次 CI 收口另修正两处测试夹具：native non-interference contract 的 fake `inject` 现在只在依赖存在时执行回调，定向 2 项通过；unfinished-tool 用例等待原生 process disclosure 可操作后再展开，并给第一轮失败补齐现场捕获，定向 1 项及最终 CI 均通过。后者在本机复现了原失败，原生按钮可以先可见、再因异步 ACP activity 投影变为可展开；仅等待 visible 会跳过点击。两项修正均保留业务断言，未修改产品行为。截至 `94977fd` 的后续文档提交不改变当时产物，继续复用已通过的构建和独立安装证据。本次 Teams/fork 生产改动的证据另列下节。
+
+## 新增复核：Teams 启停与 fork 错误分类（2026-10-11）
+
+Teams 初始关闭原本不显示控件，但热关闭时缓存的 `agentTeam` 投影可以保留，ACP slots 仍会显示入口。本轮让 ACP 管理面板与审批 dock 跟随官方 `conversation.session.header.actions` 中 `agent-team` contribution 的生命周期，关闭即撤销，重新启用可恢复；仍是静态 bundle，不宣称模块懒加载。Host/浏览器用例特意保留 Host roster 和旧投影，仅撤销原生 Team UI，证明入口清理不依赖数据消失或刷新页面。
+
+同时按官方错误处理原则修复 fork fallback：只有本地 `AcpForkPreDispatchError` 能证明尚未派发；远端 RPC 的相同错误文字不再触发 fresh fallback。定向 38 项单测、4 项 Host/Chromium、类型与构建通过；本次构建为 247 个 dry-run 包文件和 93 个运行时 JavaScript 闭包。完整命令、日志、负面控制与未验范围见[本次验证记录](dsh-0.2.1-optimization.md#实验加载与体验复核的修复验证2026-10-11)。没有新增用户开关，没有发布、tag 或合并 main；未将历史 CI 或安装产物冒充本次修复后的全平台证据。

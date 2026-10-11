@@ -5,6 +5,8 @@ import { launchAdapterWorld, root } from './scaffold.ts'
 import { launchBrowser, newEnglishPage } from './browser.ts'
 import type { TestBrowser } from './browser.ts'
 import type { AcpRemoteService } from '../../src/remote/service.js'
+import type {} from '@deepseek-ai/dsh-plugin-manager'
+import { required } from './required.ts'
 
 it('refreshes member controls during a running lead, retries metadata failures and opens the native sidebar', async () => {
   const host = await launchAdapterWorld({ teams: true })
@@ -81,3 +83,109 @@ it('refreshes member controls during a running lead, retries metadata failures a
     await host.close()
   }
 })
+
+it('follows the native Teams bundle and UI lifecycle while retaining the same conversation and roster', async () => {
+  const host = await launchAdapterWorld({ optionalBundles: ['agent-team-profile'] })
+  let browser: TestBrowser | undefined
+  const errors: string[] = []
+  try {
+    const manager = host.ctx.pluginManager
+    const bundle = '@deepseek-ai/dsh-experimental-agent-team-profile'
+    // Start the browser with Teams disabled through the official profile owner.
+    expect(await manager.setBundleEnabled(bundle, false)).toMatchObject({ application: 'applied' })
+    await vi.waitFor(() => expect(host.ctx.get('agentTeams')).toBeUndefined())
+    await host.ctx.settings.replace('dsh-acp-adapter', {
+      toolApprovalDefault: 'auto',
+      agents: {
+        devin: {
+          name: 'ACP Teams lifecycle',
+          command: process.execPath,
+          args: [join(root, 'test/mock-agent/mock-agent.ts')],
+          env: { HOME: host.workspaceCwd, MOCK_SCENARIO: 'regression', MOCK_PROFILE: 'devin', MOCK_MCP_HTTP: '1' },
+        },
+      },
+    })
+    await vi.waitFor(() => expect(host.ctx.llm.listProviders().some((item) => item.id === 'acp-devin')).toBe(true))
+    await host.ctx.agentDefaultModel.saveSelection({ provider: 'acp-devin', model: 'mock-model-a' })
+    const remote = host.ctx.get('dshAcp') as AcpRemoteService
+    const memberReads = vi.spyOn(remote, 'teamMembers')
+    browser = await launchBrowser({ headless: true })
+    const page = await newEnglishPage(browser)
+    page.on('pageerror', (error) => errors.push(error.message))
+    await page.goto(host.authenticatedUrl)
+    await connectFreshWorkspace(page, host.workspaceCwd)
+    const send = async (text: string): Promise<void> => {
+      await writeComposerDraft(page, page.locator('[data-composer-input]').first(), text)
+      await page.getByRole('button', { name: 'Send message', exact: true }).click()
+    }
+    const firstTurn = host.whenTurnSettled()
+    await send('E2E_MESSAGE')
+    const leadId = await firstTurn
+    const lead = required(host.ctx.agents.get(leadId))
+    const url = page.url()
+    const nativeTeam = page.locator('[data-team-action]')
+    const management = page.locator('[data-acp-team-management]')
+    const approvals = page.locator('[data-acp-team-approvals]')
+    await expect.poll(() => nativeTeam.count()).toBe(0)
+    await expect.poll(() => management.count()).toBe(0)
+    await expect.poll(() => approvals.count()).toBe(0)
+    expect(memberReads).not.toHaveBeenCalled()
+
+    expect(await manager.setBundleEnabled(bundle, true)).toMatchObject({ application: 'applied' })
+    await vi.waitFor(() => expect(host.ctx.get('agentTeams')).toBeDefined())
+    await nativeTeam.waitFor()
+    await expect.poll(() => management.count()).toBe(0)
+    await send('E2E_TEAM_START')
+    await page.getByText('E2E_TEAM_READY', { exact: true }).waitFor({ timeout: 30000 })
+    const trigger = page.getByRole('button', { name: 'Manage members · 1', exact: true })
+    await trigger.waitFor()
+    await trigger.click()
+    await page.locator('[data-acp-team-panel] [data-acp-managed-member="calculator"]').waitFor()
+    await vi.waitFor(() => expect(memberReads).toHaveBeenCalled())
+    const roster = required(host.ctx.sessionProjections.stateOf(lead.session, 'agentTeam'))
+    expect(roster.members.some((member) => member.name === 'calculator')).toBe(true)
+
+    // Isolate UI removal from Team domain removal: the native projection and
+    // live roster stay available, so a cached projection cannot hide the bug.
+    const nativeUi = required(
+      (await manager.listPlugins()).find(
+        (entry) => entry.moduleName === '@deepseek-ai/dsh-experimental-client-ui-agent-team',
+      ),
+    )
+    expect(await manager.setPluginEnabled(nativeUi.entryId, false)).toMatchObject({ application: 'applied' })
+    await expect.poll(() => nativeTeam.count()).toBe(0)
+    await expect.poll(() => management.count()).toBe(0)
+    await expect.poll(() => page.locator('[data-acp-team-panel]').count()).toBe(0)
+    await expect.poll(() => approvals.count()).toBe(0)
+    expect(host.ctx.agentTeams.listMembers(lead).some((member) => member.name === 'calculator')).toBe(true)
+    expect(host.ctx.sessionProjections.stateOf(lead.session, 'agentTeam')?.members).toEqual(roster.members)
+    const readsWhileDisabled = memberReads.mock.calls.length
+    await page.locator('[data-composer-input]').first().click()
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    expect(memberReads).toHaveBeenCalledTimes(readsWhileDisabled)
+
+    expect(await manager.setPluginEnabled(nativeUi.entryId, true)).toMatchObject({ application: 'applied' })
+    await nativeTeam.waitFor()
+    await trigger.waitFor()
+    expect(page.url()).toBe(url)
+    expect(await page.locator('[data-conversation-session]').last().getAttribute('data-conversation-session')).toBe(
+      leadId,
+    )
+
+    expect(await manager.setBundleEnabled(bundle, false)).toMatchObject({ application: 'applied' })
+    await vi.waitFor(() => expect(host.ctx.get('agentTeams')).toBeUndefined())
+    await expect.poll(() => nativeTeam.count()).toBe(0)
+    await expect.poll(() => management.count()).toBe(0)
+    await expect.poll(() => approvals.count()).toBe(0)
+    expect(await manager.setBundleEnabled(bundle, true)).toMatchObject({ application: 'applied' })
+    await vi.waitFor(() => expect(host.ctx.get('agentTeams')).toBeDefined())
+    await nativeTeam.waitFor()
+    await trigger.waitFor()
+    expect(host.ctx.agentTeams.listMembers(lead).some((member) => member.name === 'calculator')).toBe(true)
+    expect(page.url()).toBe(url)
+    expect(errors).toEqual([])
+  } finally {
+    await browser?.close()
+    await host.close()
+  }
+}, 120_000)

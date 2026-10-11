@@ -155,6 +155,24 @@ export interface AcpSessionRuntimeOptions {
   readonly cancelGraceMs?: number
 }
 
+export type AcpForkPreDispatchCode = 'ACP_FORK_UNSUPPORTED' | 'ACP_FORK_PRECONDITION_FAILED' | 'ACP_FORK_INTENT_FAILED'
+
+/** A fork failure established before RPC dispatch; matching display text is not such proof. */
+export class AcpForkPreDispatchError extends Error {
+  readonly code: AcpForkPreDispatchCode
+
+  constructor(code: AcpForkPreDispatchCode, cause?: unknown) {
+    const messages: Record<AcpForkPreDispatchCode, string> = {
+      ACP_FORK_UNSUPPORTED: 'The ACP Agent does not advertise session/fork',
+      ACP_FORK_PRECONDITION_FAILED: 'The ACP Agent no longer matches the parent binding',
+      ACP_FORK_INTENT_FAILED: 'The ACP fork intent could not be persisted before dispatch',
+    }
+    super(messages[code], { cause })
+    this.name = 'AcpForkPreDispatchError'
+    this.code = code
+  }
+}
+
 /** Transient failure while refreshing an already-settled, cancelled session. */
 export class AcpSessionRefreshRetryError extends Error {
   readonly code = 'ACP_SESSION_REFRESH_FAILED'
@@ -659,6 +677,8 @@ export class AcpSessionRuntime {
    * Create a child ACP session from an already-bound parent. This is kept
    * separate from start(): a successful fork owns the returned child id and
    * must never first create an unrelated session/new.
+   * AcpForkPreDispatchError proves no fork RPC was sent; every other failure
+   * retains an unknown remote outcome. The runtime owns intent-error wrapping.
    */
   async fork(
     parentSessionId: string,
@@ -675,17 +695,17 @@ export class AcpSessionRuntime {
     if (connection === undefined) throw new Error('ACP connection is not started')
     const mcpServers = this.mcpLease?.servers ?? []
     try {
-      if (!supportsFork(connection.agentCapabilities)) throw new Error('ACP_FORK_UNSUPPORTED')
+      if (!supportsFork(connection.agentCapabilities)) throw new AcpForkPreDispatchError('ACP_FORK_UNSUPPORTED')
       if (expected?.protocolVersion !== undefined && connection.protocolVersion !== expected.protocolVersion)
-        throw new Error('ACP_FORK_PRECONDITION_FAILED')
+        throw new AcpForkPreDispatchError('ACP_FORK_PRECONDITION_FAILED')
       if (expected?.agent?.name !== undefined && connection.agentInfo?.name !== expected.agent.name)
-        throw new Error('ACP_FORK_PRECONDITION_FAILED')
+        throw new AcpForkPreDispatchError('ACP_FORK_PRECONDITION_FAILED')
       if (expected?.agent?.version !== undefined && connection.agentInfo?.version !== expected.agent.version)
-        throw new Error('ACP_FORK_PRECONDITION_FAILED')
+        throw new AcpForkPreDispatchError('ACP_FORK_PRECONDITION_FAILED')
       try {
         await beforeDispatch?.()
       } catch (error) {
-        throw new Error(`ACP_FORK_INTENT_FAILED: ${error instanceof Error ? error.message : String(error)}`)
+        throw new AcpForkPreDispatchError('ACP_FORK_INTENT_FAILED', error)
       }
       const response = await connection.forkSession(
         parentSessionId,

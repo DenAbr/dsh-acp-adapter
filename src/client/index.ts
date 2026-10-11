@@ -34,6 +34,7 @@ import { AcpAgentControl } from './ui/AcpAgentControl.ts'
 import { AcpTeamManagement } from './ui/AcpTeamManagement.ts'
 import { AcpTeamApprovals } from './ui/AcpTeamApprovals.ts'
 import type { AcpTeamApprovalActions } from './ui/AcpTeamApprovals.ts'
+import { followNativeTeamUi } from './ui/native-team-ui-lifecycle.ts'
 import { resolveCrossBackendLocation } from './data/cross-backend-controller.ts'
 import { AcpPanelController } from './data/controller.ts'
 import { ManagedAcpRouteCatalog } from './data/managed-routes.ts'
@@ -278,41 +279,52 @@ async function registerUi(ctx: ClientContext): Promise<void> {
         openSubagentAside(ctx.sidebarRight, { parentSessionId, childSessionId, mode: 'continuable' })
       },
     }
-    teamCtx.slots.inject('conversation.session.header.utilities', () =>
-      teamCtx.slots.register(
-        {
-          name: 'conversation.session.header.utilities',
-          id: 'acp-team-management',
-          order: 94,
-          locale: 'acpActivity',
-          inject: () => ({
-            remote: ctx.remote.dshAcp,
-            streamFactory: ctx.remote,
-            loadMembers: actions.loadMembers,
-            ownsRoute: managedRoutes.owns,
-            isCurrent: actions.isCurrent,
-            status: actions.status,
-            openMember: actions.openMember,
-            async interruptMember(lead: SessionId, member: SessionId) {
-              const result = await teamCtx.remote.subagents.interruptByParent(member, lead, 'continuable')
-              if (!result.ok) throw new Error(result.error.message)
-            },
-          }),
-        },
-        AcpTeamManagement,
-      ),
-    )
-    teamCtx.slots.inject('conversation.input.dock', () =>
-      teamCtx.slots.register(
-        {
-          name: 'conversation.input.dock',
-          id: 'acp-team-approvals',
-          order: 95,
-          locale: 'acpActivity',
-          inject: () => actions,
-        },
-        AcpTeamApprovals,
-      ),
+    teamCtx.effect(
+      () =>
+        followNativeTeamUi(teamCtx.slots, () => {
+          const unmount = teamCtx.effect(function* () {
+            yield teamCtx.slots.inject('conversation.session.header.utilities', () =>
+              teamCtx.slots.register(
+                {
+                  name: 'conversation.session.header.utilities',
+                  id: 'acp-team-management',
+                  order: 94,
+                  locale: 'acpActivity',
+                  inject: () => ({
+                    remote: ctx.remote.dshAcp,
+                    streamFactory: ctx.remote,
+                    loadMembers: actions.loadMembers,
+                    ownsRoute: managedRoutes.owns,
+                    isCurrent: actions.isCurrent,
+                    status: actions.status,
+                    openMember: actions.openMember,
+                    async interruptMember(lead: SessionId, member: SessionId) {
+                      const result = await teamCtx.remote.subagents.interruptByParent(member, lead, 'continuable')
+                      if (!result.ok) throw new Error(result.error.message)
+                    },
+                  }),
+                },
+                AcpTeamManagement,
+              ),
+            )
+            yield teamCtx.slots.inject('conversation.input.dock', () =>
+              teamCtx.slots.register(
+                {
+                  name: 'conversation.input.dock',
+                  id: 'acp-team-approvals',
+                  order: 95,
+                  locale: 'acpActivity',
+                  inject: () => actions,
+                },
+                AcpTeamApprovals,
+              ),
+            )
+          }, 'dsh-acp: active native Team controls')
+          return () => {
+            void unmount()
+          }
+        }),
+      'dsh-acp: native Team UI lifecycle',
     )
   })
   ctx.effect(() => coordinator.start(), 'dsh-acp: model transition coordinator')
