@@ -11,10 +11,5 @@ tmp/
 # local-only plans, research notes, raw evidence, and generated release material
 .local/
 
-# local compatibility assessments and verification notes
-/docs/dsh-0.2.1-alpha.md
-/docs/dsh-0.2.1-experimental.md
-/docs/dsh-0.2.1-optimization.md
-
 # optional read-only DSH checkout used by upstream compatibility tests
 reference/

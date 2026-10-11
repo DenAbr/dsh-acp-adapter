@@ -13,7 +13,7 @@ Review the user's decisions as well as the implementation: installation and cred
 
 For optional capabilities, distinguish installed packages, imported code, registered hooks, active services, and per-session availability. Follow the official bundle/profile entry through enable, disable, late mount, and disposal. A hidden component or erased type import is not evidence of lazy module loading; a common ACP safety guard is not an enabled experimental service. Do not add a second user-facing switch or infer permission from service presence. Consult relevant pinned upstream `.agents/notes` alongside skills: implemented notes explain current decisions, proposed notes require source verification, rejected notes preserve scoped counterexamples, and archived notes are historical only.
 
-Use [native reuse](../../../docs/native-reuse.md) for ownership and [input capabilities](../../../docs/agent-input-capabilities.md) for ACP execution semantics. Check these where the change reaches them:
+Use [native reuse](../../../docs/native-reuse.md) for ownership. For input changes, trace the current ACP connection's capabilities, native admission, handoff, and recovery through implementation and focused tests; an Agent CLI's steering support alone does not establish ACP support. Check these where the change reaches them:
 
 - Trace cancellation, disposal, late completion and restoration through the shipped Loader, ACP process, MCP bridge or browser entry. A directly mounted mock plugin does not certify those paths.
 - Inspect the actual Agent-visible prompts, schemas, tool results and context updates. DSH skills use the current DSH loading route; they are not installed into an Agent's private skill directory and do not grant tools or permissions.
