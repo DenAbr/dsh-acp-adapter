@@ -53,6 +53,9 @@ it('shows a tool without a terminal update as unfinished and accepts the next pr
     await firstSettled
     const firstProcess = page.locator('[data-turn-process="1"][data-turn-process-tool-calls]')
     await firstProcess.waitFor({ state: 'visible', timeout: 15_000 })
+    // Native turn/end can render this control before the async ACP activity
+    // projection supplies its content. Wait for its disclosure, not just its box.
+    await expect.poll(() => firstProcess.isEnabled(), { timeout: 15_000 }).toBe(true)
     if ((await firstProcess.getAttribute('aria-expanded')) === 'false') await firstProcess.click()
     await expect.poll(() => firstProcess.getAttribute('aria-expanded'), { timeout: 15_000 }).toBe('true')
     for (const stepButton of await page.locator('[data-step-process][data-chat-turn="1"] > div > button').all()) {
@@ -94,6 +97,7 @@ it('shows a tool without a terminal update as unfinished and accepts the next pr
     expect(await page.getByRole('button', { name: 'Resolve recovery issue', exact: true }).count()).toBe(0)
     const nextProcess = page.locator('[data-turn-process="2"][data-turn-process-tool-calls]')
     await nextProcess.waitFor({ state: 'visible', timeout: 15_000 })
+    await expect.poll(() => nextProcess.isEnabled(), { timeout: 15_000 }).toBe(true)
     if ((await nextProcess.getAttribute('aria-expanded')) === 'false') await nextProcess.click()
     await expect.poll(() => nextProcess.getAttribute('aria-expanded'), { timeout: 15_000 }).toBe('true')
     for (const stepButton of await page.locator('[data-step-process][data-chat-turn="2"] > div > button').all()) {
@@ -121,6 +125,9 @@ it('shows a tool without a terminal update as unfinished and accepts the next pr
         JSON.stringify({ stage: 'next-turn', promptCount: 2, response: 'E2E_UNFINISHED_NEXT_DONE' }, null, 2),
       )
     }
+  } catch (error) {
+    if (page !== undefined) await captureFailure('failure')
+    throw error
   } finally {
     await browser?.close()
     await host.close()
