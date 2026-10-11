@@ -80,3 +80,13 @@ Worktree 的准入保护见 [working-directory-guard](../src/host/composition/wo
 CoT/Voice 首跑揭示了三个夹具假设：新 thought 到达前按 `.last()` 选中了上一轮 reasoning；原生正常 composer 的 DOM 在权限问答期间保留但隐藏；Bing 将 `zh` 规范为 `zh-Hans`。修复后用准确新行身份、实际问答交互和完整三次 wire request 断言验证，没有修改产品行为或放宽取消检查。明暗 420px 截图已目视检查，拥有用例同时核验组件 bounds 不越出 viewport；没有宣称完整 Electron 或桌面安装包通过。
 
 测试截图与运行日志位于 gitignored `.local/`。通过结果应同时记录源码/产物输入、精确 Host、平台与场景；后续更改只重跑失效的拥有检查。不将 skipped、pending、历史 live 或某个重试成功扩大为本轮全平台兼容。
+
+## 跨平台 CI 收口
+
+2026-10-11，[CI 38108884154](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/actions/runs/38108884154) 在提交 `bc09f89f8fdb9a6f6907037bbdcfc04fc3d93eea` 全部通过：Linux、macOS、Windows npm 兼容、三个完整 Chromium UI 分片和汇总门禁。Linux 全量单测为 135 文件、1466 项通过；Linux/macOS 的独立 npm Host 安装、卸载清理与 HTTP 启动通过，Windows 普通用户类型、单测、构建、打包及环境清理通过。
+
+三个 UI 分片分别为 60/65/71 项通过、3/6/15 项跳过，合计 196 项通过、24 项跳过；跳过项按配置保留，不计入通过。翻译、语音、检索、终端、Worktree 和 Ralph 的本轮七项新增用例均在对应分片通过。该 CI 不包含真实模型调用或完整桌面安装包验收；图像能力的 owning 单测与 provider 范围仍按上文记录。
+
+此次 CI 从创建到结束为 11 分 59 秒。平台兼容 job 耗时 Linux 3 分 33 秒、macOS 3 分 8 秒、Windows 5 分 2 秒；UI 分片分别 7 分 24 秒、11 分 10 秒、11 分 47 秒。它记录本次 runner、缓存和输入下的实际耗时，不构成端到端发布耗时承诺。
+
+CI 收口另修正两处测试夹具：native non-interference contract 的 fake `inject` 现在只在依赖存在时执行回调，定向 2 项通过；unfinished-tool 用例等待原生 process disclosure 可操作后再展开，并给第一轮失败补齐现场捕获，定向 1 项及最终 CI 均通过。后者在本机复现了原失败，原生按钮可以先可见、再因异步 ACP activity 投影变为可展开；仅等待 visible 会跳过点击。两项修正均保留业务断言，未修改产品行为。产品产物自上述 Stop/cwd 修复后保持不变，继续复用已通过的构建和独立安装证据；本节之后的文档提交不重跑相同输入。
