@@ -202,23 +202,6 @@ export function collectLiveDiagnostic<T>(factory: () => T): T | undefined {
   }
 }
 
-/** Lazily prepare and emit an event only when a sink is installed. */
-export function captureLiveDiagnostic(factory: () => LiveDiagnosticEvent): void {
-  const state = currentState()
-  if (state === undefined) return
-  try {
-    const event = factory()
-    const result = state.sink(event)
-    if (result !== undefined && typeof (result as PromiseLike<void>).then === 'function') {
-      void Promise.resolve(result).catch(() => {
-        state.failures += 1
-      })
-    }
-  } catch {
-    state.failures += 1
-  }
-}
-
 /** A diagnostics sink is observational only; callback failures never escape into Host behavior. */
 export function emitLiveDiagnostic(event: LiveDiagnosticEvent): void {
   const state = currentState()

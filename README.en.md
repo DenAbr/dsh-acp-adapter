@@ -4,7 +4,7 @@
 
 Use ACP Agents in DSH with native sessions, tool approvals, and team collaboration.
 
-> **Development branch `0.2.1-alpha`:** targets DSH `0.2.1-alpha.2` and is unpublished. It will stay off main until validation against the next stable desktop release. See the [compatibility and UI/UX assessment](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/0.2.1-alpha/docs/dsh-0.2.1-alpha.md). Installation instructions below describe the published version.
+> **Development branch `0.2.1-alpha`:** targets DSH `0.2.1-alpha.2` and is unpublished. It will stay off main until validation against the next stable desktop release. Installation instructions below describe the published version.
 
 ## Install
 
@@ -59,7 +59,7 @@ The plugin ships with a snapshot of the [official ACP Agent catalog](https://age
 
 > CodeBuddy CLI and the WorkBuddy desktop app share account credits, with no separate subscription required. Connect DSH through the CodeBuddy CLI. See [CodeBuddy account and subscription details](https://www.codebuddy.cn/docs/ide/Account/pricing) and the [ACP CLI reference](https://www.codebuddy.cn/docs/cli/cli-reference).
 
-For test coverage and results, see the [E2E verification record](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/main/test/e2e/README.md).
+For published-version test coverage and results, see the [rc.2.9 E2E verification record](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/v0.2.0-rc.2.9/test/e2e/README.md).
 
 ## Preview
 
@@ -89,4 +89,4 @@ For test coverage and results, see the [E2E verification record](https://github.
 
 Export the safe summary JSON from **ACP Diagnostics**; it excludes message text, commands, paths, raw session IDs, and ACP credentials. DSH's native session-log ZIP may contain prompts, tool arguments, file paths, and attachments; inspect and redact it before sharing.
 
-For help, open an [issue](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/issues) with the error reference, DSH/plugin versions, and redacted log excerpts. See the [native reuse boundaries](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/main/docs/native-reuse.en.md).
+For help, open an [issue](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/issues) with the error reference, DSH/plugin versions, and redacted log excerpts. See the published version's [rc.2.9 native reuse boundaries](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/v0.2.0-rc.2.9/docs/native-reuse.en.md).

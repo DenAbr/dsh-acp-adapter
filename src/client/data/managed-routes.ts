@@ -21,10 +21,6 @@ export class ManagedAcpRouteCatalog {
 
   owns = (provider: string | undefined): boolean => provider !== undefined && this.routes.has(provider)
 
-  snapshot(): ReadonlySet<string> {
-    return new Set(this.routes)
-  }
-
   dispose(): void {
     this.unsubscribe()
     this.routes.clear()

@@ -32,7 +32,6 @@ describe('ACP audit timeline Remote', () => {
     }
     const service = new AcpRemoteService(new Context(), {
       registry: { agents: () => new Map(), probeCacheFor: () => undefined },
-      resolveLiveAgent: () => undefined,
       ownedSessionReadGate: () => true,
       auditTimeline: {
         list: async (_id, after, limit) => rows.filter((row) => row.seq > after).slice(0, limit),
@@ -116,7 +115,6 @@ describe('ACP audit timeline Remote', () => {
           listModels: async () => undefined,
         }),
       },
-      resolveLiveAgent: () => undefined,
       activityTimeline: source,
       activityAccess: (sessionId) => sessionId === 'session-1',
     })
@@ -195,7 +193,6 @@ describe('ACP audit timeline Remote', () => {
     const activityHead = vi.fn(async () => 3)
     const service = new AcpRemoteService(new Context(), {
       registry: { agents: () => new Map(), probeCacheFor: () => undefined },
-      resolveLiveAgent: () => undefined,
       ownedSessionReadGate: () => true,
       auditTimeline: {
         list: auditList,
@@ -276,7 +273,6 @@ describe('ACP audit timeline Remote', () => {
           listModels: async () => undefined,
         }),
       },
-      resolveLiveAgent: () => undefined,
       activityTimeline: source,
       activityAccess: () => true,
     })
@@ -324,7 +320,6 @@ describe('ACP audit timeline Remote', () => {
           listModels: async () => undefined,
         }),
       },
-      resolveLiveAgent: () => undefined,
       activityTimeline: source,
       activityAccess: () => true,
     })
@@ -385,7 +380,6 @@ describe('ACP audit timeline Remote', () => {
           listModels: async () => undefined,
         }),
       },
-      resolveLiveAgent: () => undefined,
       auditTimeline: {
         list: async (_sessionId, afterSeq, limit) => rows.filter((row) => row.seq > afterSeq).slice(0, limit),
         hasMore: async (_sessionId, seq) => rows.some((row) => row.seq > seq),
@@ -432,7 +426,6 @@ describe('ACP audit timeline Remote', () => {
           listModels: async () => undefined,
         }),
       },
-      resolveLiveAgent: () => undefined,
       ownedSessionReadGate: () => true,
       auditTimeline: {
         list: async () => [],
@@ -464,7 +457,6 @@ describe('ACP audit timeline Remote', () => {
     let more = 0
     const service = new AcpRemoteService(new Context(), {
       registry: { agents: () => new Map(), probeCacheFor: () => undefined },
-      resolveLiveAgent: () => undefined,
       ownedSessionReadGate: () => false,
       auditTimeline: {
         list: async () => {
@@ -500,7 +492,6 @@ describe('ACP audit timeline Remote', () => {
           listModels: async () => undefined,
         }),
       },
-      resolveLiveAgent: () => undefined,
     })
     await expect(service.auditTimeline('session-1')).rejects.toMatchObject({
       code: 'dsh-acp/config',

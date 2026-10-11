@@ -9,8 +9,8 @@
 import type { SubprocessSeam } from './subprocess.ts'
 
 /**
- * 连接层消费的 spawn 计划结构面（`src/domain/policy/sandbox.ts` 的
- * The native spawn planner satisfies it; this module remains independent from
+ * Spawn plan consumed by the connection layer. The native spawn planner
+ * satisfies it; this module remains independent from
  * domain policy to avoid a dependency cycle.
  */
 export interface AcpSpawnPlanView {

@@ -17,9 +17,8 @@
  *   `_meta: Record<string, unknown>` 过不了 strict boundary，且 client 本就只
  *   消费收窄字段）；SDK → contract 的显式映射在本文件（数据最小化：auth 的
  *   vars/env 键名、config option 的 `_meta` 不过线）。
- * - 活体解析用 JSON `sessionId: string` 参数 + 方法体内 `resolveLiveAgent`：
- *   标准 agent lookup 的 wire 类型外部不可命名。写路径仍只服务
- * 活体会话的 backend/recovery 事实按需读取；不会把旧 Agent 控制面重新暴露到 Remote。
+ * - 会话身份只使用 JSON `sessionId: string` 参数；backend/recovery 由 Host 的
+ *   binding、request header 与 recovery store 提供，不暴露 Agent 控制对象。
  * - 错误纪律：业务失败统一映射为 `dsh-acp/*` `RemoteError`，保留稳定的
  *   category 以及 ACP kind/correlationId；参数错误使用 Gateway 公共
  *   `gateway/bad-request`。Gateway 将 typed code/details 原样送到 Client，
@@ -184,23 +183,6 @@ function healthyRecoveryView(sessionId: string): AcpRecoveryView {
   }
 }
 
-function recoveryViewOf(state: AcpLiveAgentFace['recoveryState'] | undefined, sessionId: string): AcpRecoveryView {
-  if (state === undefined) return healthyRecoveryView(sessionId)
-  return {
-    dshSessionId: state.dshSessionId,
-    kind: state.kind,
-    cause: state.cause ?? null,
-    detail: state.detail ?? null,
-    provider: state.provider ?? null,
-    acpSessionId: state.acpSessionId ?? null,
-    generation: state.generation ?? null,
-    interruptedTurnId: state.interruptedTurnId ?? null,
-    lastAttemptAt: state.lastAttemptAt ?? null,
-    lastUserAction: state.lastUserAction ?? null,
-    updatedAt: state.updatedAt,
-  }
-}
-
 // ---------- 依赖注入面（接线；测试给假） ----------
 
 /**
@@ -268,37 +250,6 @@ export interface AcpHealthRegistryLike {
   readonly modelsChanged?: (profileIds: readonly string[]) => void
 }
 
-/**
- * Minimal live-agent seam used to classify a session backend and expose recovery state.
- */
-export interface AcpLiveAgentFace {
-  readonly status: 'idle' | 'running'
-  /** Live ACP wrapper phase; draft is not yet a committed execution backend. */
-  readonly backendState?: 'blank' | 'draft' | 'established'
-  /** 本会话的 provider 路由（`acp-<id>`； `backendOf` 的权威 backend 判定之一）。 */
-  readonly providerRoute: string
-  /** 构造该 wrapper 时采用的会话模型；draft 阶段用于覆盖 DSH 的全局默认影子。 */
-  readonly selectedModel?: string | undefined
-  /** Live state used only by backend/recovery read paths. */
-  readonly continuityState: AcpSessionContinuityState
-  readonly recoveryState?: {
-    readonly dshSessionId: string
-    readonly kind: AcpRecoveryView['kind']
-    readonly cause?: string
-    readonly detail?: string
-    readonly provider?: string
-    readonly acpSessionId?: string
-    readonly generation?: number
-    readonly interruptedTurnId?: string
-    readonly lastAttemptAt?: number
-    readonly lastUserAction?: string
-    readonly updatedAt: number
-  }
-}
-
-/** Resolve a dsh session id to its live ACP agent；undefined = 无活体（调用即抛错）。 */
-export type AcpResolveLiveAgent = (sessionId: string) => AcpLiveAgentFace | undefined
-
 /** Host-owned recovery verbs for the provider composition.  This deliberately
  * exposes no legacy Agent object or model/options surface. */
 export interface AcpRecoveryAdapterLike {
@@ -322,8 +273,6 @@ export interface AcpRemoteServiceDeps {
 
   /** Registry：agent 列表 + probe 缓存（快照/刷新）。 */
   registry: AcpHealthRegistryLike
-  /** 活体 agent 解析器（接线提供真实实现）。 */
-  resolveLiveAgent: AcpResolveLiveAgent
   /**
    * 宿主结构门事实（；缺省恒 true）：health 行的五态 `state` 字段在
    * 结构门未通过时归 `incompatible`。生产接线由 host composition 以公开宿主
@@ -344,10 +293,9 @@ export interface AcpRemoteServiceDeps {
    */
   subprocess?: SubprocessSeamResolution
   /**
-  /**
- * 活体 ACP 会话的连续性清单（health 视图 `liveSessions` 字段的数据源）。
-   * 缺省 → 该字段归 null（如实区分「未接线」与「无活体会话」的空数组）。生产
-   * 接线 = host composition 过滤当前 ACP runtime。
+   * 活体 ACP 会话的连续性清单（health 视图 `liveSessions` 字段的数据源）。
+   * 可选；未接线时该字段归 null，区别于明确读取后没有活体会话的空数组。
+   * 当前 provider composition 不接线此清单。
    */
   listLiveSessions?: () => readonly { readonly sessionId: string; readonly continuity: AcpSessionContinuityState }[]
   /**
@@ -525,7 +473,6 @@ interface ResolvedDeps {
   readonly teamManagement: AcpRemoteServiceDeps['teamManagement']
 
   readonly registry: AcpHealthRegistryLike
-  readonly resolveLiveAgent: AcpResolveLiveAgent
   readonly hostCompatible: () => boolean
   readonly checkExecutable: (command: string) => Promise<boolean>
   readonly queryVersion: (command: string) => Promise<string | null>
@@ -576,7 +523,6 @@ export class AcpRemoteService extends TypertRemoteService {
     this.resolved = {
       registry: deps.registry,
       teamManagement: deps.teamManagement,
-      resolveLiveAgent: deps.resolveLiveAgent,
       // host 未接线结构门事实时按兼容处理（纯模块单测路径；生产恒注入）
       hostCompatible: deps.hostCompatible ?? (() => true),
       checkExecutable:
@@ -1249,16 +1195,7 @@ export class AcpRemoteService extends TypertRemoteService {
     return adapter
   }
 
-  /**
-   * backendOf（「backend 不可变」的 picker 主防线数据面）：host 权威的
-   * 会话 backend 查询，纯读零副作用。判定优先级：sidecar binding（ACP 会话
-   * 创建即有）→ 尚未建立 binding 的活体 AcpAgent → 日志末条 request/header 的 provider（只读
-   * inspect 窥测）→ 都没有 = 'blank'（blank
-   * 会话的 current.provider 只是实时默认的影子，不算定 backend）。
-   * 会话不存在/日志不可读且无任何在场证据 → 响亮报错（protocol-error）：调用方
-   * 手里应都是真实 session，冒充 blank 会让 picker 放行一个不可判定的会话。
-   */
-  /** Read the durable recovery state without resolving a legacy live Agent. */
+  /** Read Host-owned recovery facts, including its durable store and in-memory fallback. */
   @Remote('recoverySnapshot')
   async recoverySnapshot(sessionId: string): Promise<AcpRecoveryView> {
     // First-use ACP sessions can be projected before session/new writes a
@@ -1268,8 +1205,7 @@ export class AcpRemoteService extends TypertRemoteService {
     const persisted =
       this.resolved.recoveryStateStore === null ? undefined : await this.resolved.recoveryStateStore.read(sessionId)
     if (persisted !== undefined) return persisted
-    const live = this.resolved.resolveLiveAgent(sessionId)
-    return live === undefined ? healthyRecoveryView(sessionId) : recoveryViewOf(live.recoveryState, sessionId)
+    return healthyRecoveryView(sessionId)
   }
 
   /** Subscribe before reading volatile and durable recovery facts; reads stay side-effect-free. */
@@ -1351,14 +1287,17 @@ export class AcpRemoteService extends TypertRemoteService {
     return await this.runRecoveryOperation(sessionId, (adapter) => adapter.retryOriginal(sessionId))
   }
 
-  /** Provider-composition blank rebind. Unlike the legacy rebindBlank method,
-   * this returns the recovery state directly and never depends on an option
-   * snapshot being present. */
+  /** Rebind a blank ACP context and return recovery state without requiring an option snapshot. */
   @Remote('rebindRecoveryBlank')
   async rebindRecoveryBlank(sessionId: string): Promise<AcpRecoveryView> {
     return await this.runRecoveryOperation(sessionId, (adapter) => adapter.rebindBlank(sessionId))
   }
 
+  /**
+   * Read the current backend from its durable binding, then request header.
+   * A known live session without either fact is blank; an absent or unreadable
+   * session without live existence evidence is rejected rather than guessed.
+   */
   @Remote('backendOf')
   async backendOf(sessionId: string): Promise<AcpBackendState> {
     // This query intentionally includes native/blank sessions so the model
@@ -1375,25 +1314,6 @@ export class AcpRemoteService extends TypertRemoteService {
     }
     const bound = await facts.readBindingProvider(sessionId)
     if (bound !== undefined) return { state: 'established', provider: bound }
-    // A newly-created session whose default model is ACP already owns an ACP
-    // wrapper. Before session/new it has no durable binding yet, but its
-    // execution-backend identity is not blank: Alpha cannot replace that live
-    // wrapper in place. Report it as a provider-qualified draft so the client
-    // can converge Native Agent Access and route model choices without asking
-    // the user to select the same Agent a second time.
-    const liveAcp = this.resolved.resolveLiveAgent(sessionId)
-    if (liveAcp !== undefined) {
-      const state = liveAcp.backendState ?? 'established'
-      return state === 'blank'
-        ? {
-            state: 'draft',
-            provider: liveAcp.providerRoute,
-            ...(liveAcp.selectedModel === undefined || liveAcp.selectedModel === ''
-              ? {}
-              : { model: liveAcp.selectedModel }),
-          }
-        : { state, provider: liveAcp.providerRoute }
-    }
     try {
       const header = await facts.peekHeaderProvider(sessionId)
       return header === undefined ? { state: 'blank' } : { state: 'established', provider: header }

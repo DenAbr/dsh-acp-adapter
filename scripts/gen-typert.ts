@@ -1,41 +1,20 @@
 #!/usr/bin/env node
-// gen-typert.ts — generate the typert host service manifest + remote client
-// from the narrowed ACP remote contract (src/remote/service.ts) by driving
-// @deepseek-ai/dsh-typert-generator's public WorkspaceTypertGenerator API
-// (the package ships no CLI). External-package recipe proven by
-// 本机兼容性探针 (README「外部配方」四个硬条件):
+// Generate the Host manifest and Remote client from src/remote/service.ts
+// through the published WorkspaceTypertGenerator API.
 //
-//   1. Synthetic workspace staging at .typert/ (gitignored):
-//      tsconfig.host.json aggregate + packages/<pkg>/ real directories —
-//      WorkspaceAnalyzer hard-requires package roots under <root>/packages/.
-//   2. @deepseek-ai/dsh-typert-protocol staged as a compact declaration facade
-//      with `paths` mappings in both analysis tsconfigs. The target Typert
-//      release supports duplicate runtime copies, but the generator still identifies
-//      Typert symbols by their analysis-program declaration.
-//   3. ./typert (+ ./remote) exports/files pre-declared in package.json
-//      (validateExport reads the staged copy of the real package.json).
-//   4. Payload types exported from the non-root public subpath ./client
-//      (publicRemoteType skips '.', './typert', './remote').
+// The analyzer requires a workspace with packages/ roots. .typert/ stages
+// only the service's relative-import closure, avoiding Host-wide
+// TypertLookupMap merges. Bare imports resolve from this package's node_modules.
+// A declaration facade gives Typert symbols one analysis-program identity;
+// it does not replace the runtime protocol package.
 //
-// Only the transitive relative-import closure of remote/service.ts is staged,
-// so the analysis program never pulls dsh-agent/dsh-session d.ts (their
-// TypertLookupMap merges break the analyzer) — mirrored by
-// test/contracts/architecture.spec.ts, so drift fails tests. Bare imports
-// (@agentclientprotocol/sdk, cordis, …) resolve by walking up to this
-// package's real node_modules.
+// The staged ./client entry exports payload types without importing generated
+// runtime files. Its export matches src/client/index.ts; the generated public
+// declarations and main typecheck verify that match. Manifest validation uses
+// the real ./typert, ./remote and files[] declarations.
 //
-// src/client/index.ts is NOT staged verbatim: it value-imports the generated
-// lib/typert.remote-client.js for `$mount`, which does not exist on a fresh
-// checkout (chicken-and-egg). Its only role in the analysis is the
-// publicRemoteType home — payload types reachable from the './client'
-// subpath — so the staged copy is a synthetic one-liner re-exporting the
-// contract. The real file keeps the same `export type *` line, and the main
-// typecheck pins consistency: lib/typert.remote-client.d.ts imports the
-// payload types from '<package.json name>/client', which tsconfig paths maps to
-// ./src/client/index.ts — a missing re-export fails `pnpm typecheck`.
-//
-// Artifacts land in lib/ (typert.host.{js,d.ts}, typert.remote-client.{js,d.ts}
-// (+ remote-client d.ts.map, excluded from the tarball)) and ship via files[].
+// Artifacts are written to lib/typert.host.{js,d.ts} and
+// lib/typert.remote-client.{js,d.ts,d.ts.map}; the map is not published.
 //
 // Usage: node scripts/gen-typert.ts [--check]
 //   --check  fail if lib/ artifacts are missing or stale vs a fresh regen.
@@ -58,11 +37,7 @@ const SRC_DIR = join(PACKAGE_DIR, 'src')
 const STAGE_DIR = join(PACKAGE_DIR, '.typert')
 const PROTOCOL_FACADE = join(PACKAGE_DIR, 'scripts/typert-protocol-facade.d.ts')
 
-// The generator's `generate(packages)` filter and the emitted manifest.package /
-// method-id prefixes all derive from the staged package.json `name` — read the
-// real manifest once so a rename (: @zaimokuza/ scope) never drifts. The
-// staging DIRECTORY below keeps the neutral name dsh-acp-adapter: package roots
-// only need to live under <root>/packages/, the dirname is not the identity.
+// Package identity and method IDs use the manifest name, not the staging directory.
 const REAL_PKG = JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'))
 const PACKAGE_NAME = REAL_PKG.name
 
@@ -110,7 +85,7 @@ function relativeImportClosure(entries: readonly string[]) {
   return { sources: [...seen].filter((rel) => existsSync(join(SRC_DIR, rel))), dataImports: [...dataImports] }
 }
 
-/** Shared compilerOptions, mirroring the spike workspace tsconfigs. */
+/** Compiler options shared by the staged package and aggregate analysis. */
 const TS_COMPILER_OPTIONS = {
   target: 'ES2024',
   module: 'NodeNext',
@@ -131,7 +106,7 @@ function writeJson(path: string, value: unknown) {
 function stage() {
   rmSync(STAGE_DIR, { recursive: true, force: true })
 
-  // packages/typert-protocol — minimal analyzer facade (spike recipe #2).
+  // Bind all analyzer references to the same protocol declarations.
   const protocolRoot = join(STAGE_DIR, 'packages', 'typert-protocol')
   mkdirSync(join(protocolRoot, 'src'), { recursive: true })
   cpSync(PROTOCOL_FACADE, join(protocolRoot, 'src', 'index.d.ts'))
@@ -152,24 +127,10 @@ function stage() {
     include: ['src'],
   })
 
-  // packages/dsh-acp-adapter — package.json with NARROWED exports: the real
-  // `.` entry resolves to src/index.ts, which is intentionally outside the
-  // staged closure (it would pull the whole host face, incl. the dsh-agent
-  // chain, into the analyzer). FaceAnalyzer.collectExports resolves every
-  // declared subpath to a staged source file, so the staged copy keeps only
-  // `./client` (src/client/index.ts — the publicRemoteType home), `./typert`,
-  // `./remote` (both skipped by the analyzer), and `./package.json`.
-  // validateExport still sees the ./typert + ./remote declarations (recipe #3)
-  // and the real files[] list.
-  //
-  // Plus one staging-only subpath: `./service` → src/remote/service.ts. The
-  // analyzer discovers a host face by walking package-internal imports from
-  // its export entry sources until it finds a surface (a class member with a
-  // `@Remote` decorator); `./client` never reaches host code (layering), and
-  // `./typert`/`./remote` are excluded from entrySourcePaths, so without this
-  // pseudo-entry the face is never discovered. The emitted descriptors bind
-  // the service by NAME (`ctx.get('dshAcp')`), so the extra subpath has no
-  // effect on the artifacts or the real package manifest.
+  // Exclude the root Host export from analysis. The staging-only ./service
+  // export makes the decorated Remote service discoverable; ./client cannot
+  // reach Host code and the analyzer skips ./typert and ./remote entry sources.
+  // Generated descriptors bind ctx.get('dshAcp'), so ./service is not published.
   const staged = join(STAGE_DIR, 'packages', 'dsh-acp-adapter')
   mkdirSync(staged, { recursive: true })
   writeJson(join(staged, 'package.json'), {
@@ -216,12 +177,10 @@ function stage() {
     mkdirSync(dirname(dest), { recursive: true })
     cpSync(source, dest)
   }
-  // Synthetic './client' entry: the publicRemoteType home (recipe #4). Mirrors
-  // the `export type *` line of the real src/client/index.ts (see header).
+  // Public payload type home, matching the real client's type re-export.
   mkdirSync(join(staged, 'src', 'client'), { recursive: true })
   writeFileSync(join(staged, 'src', 'client', 'index.ts'), "export type * from '../contract/remote.ts'\n")
 
-  // Aggregate face tsconfig (spike recipe #1).
   writeJson(join(STAGE_DIR, 'tsconfig.host.json'), {
     compilerOptions: {
       ...TS_COMPILER_OPTIONS,

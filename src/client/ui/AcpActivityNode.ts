@@ -63,7 +63,6 @@ export type ActivityNodeProps = {
   readonly sessionId: string
   readonly t: (key: AcpLocaleKey, params?: Record<string, string | number>) => string
   readonly journalHub: AcpActivityJournalHub
-  readonly onProjectedChild?: (parentSessionId: string, childSessionId: string) => void
   readonly onOpenProjectedChild?: (parentSessionId: string, childSessionId: string) => void
   readonly jsonStringWrapping?: AcpJsonStringWrapping
   readonly renderTool?: (row: AcpActivityView) => ReactNode
@@ -800,7 +799,6 @@ export function AcpActivityContent({
   journalHub,
   t,
   openFile,
-  onProjectedChild,
   onOpenProjectedChild,
   jsonStringWrapping,
   renderTool,
@@ -825,10 +823,6 @@ export function AcpActivityContent({
       const isRetrying = handle.retrying()
       setUnavailable(hasError && !handle.loading() && stableFailure)
       setReconnecting(hasError && !stableFailure && !isRetrying)
-      for (const row of all) {
-        const projected = completedProjectedChild(row)
-        if (projected !== undefined) onProjectedChild?.(projected.parentSessionId, projected.childSessionId)
-      }
     }
     const ownerSessionId = activityJournalSessionId(data, sessionId)
     handle = journalHub.acquire(ownerSessionId, ownerSessionId, data.promptAnchorMessageId, publish)
@@ -838,7 +832,7 @@ export function AcpActivityContent({
       retryRef.current = undefined
       handle.release()
     }
-  }, [data.ownerDshSessionId, data.promptAnchorMessageId, sessionId, journalHub, onProjectedChild])
+  }, [data.ownerDshSessionId, data.promptAnchorMessageId, sessionId, journalHub])
 
   if (rows.length === 0 && !unavailable && !reconnecting) return null
   return h(

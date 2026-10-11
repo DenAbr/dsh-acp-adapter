@@ -6,7 +6,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   ACP_TERMINAL_MAX_ACTIVE,
   ACP_TERMINAL_MAX_OUTPUT_BYTES,
-  ACP_TERMINAL_PRESENTATION_MAX_COUNT,
   createAcpTerminalHandlers,
 } from '../../../src/runtime/client-capabilities/terminal.ts'
 import type { SubprocessSeam } from '../../../src/runtime/process/subprocess.ts'
@@ -40,7 +39,7 @@ function host(audit?: (event: import('../../../src/domain/policy/events.ts').Acp
 }
 
 describe('ACP v1 terminal host', () => {
-  it('runs a structured command, merges stdout/stderr, enforces UTF-8 byte truncation and preserves a released presentation snapshot', async () => {
+  it('runs a structured command, merges stdout/stderr, enforces UTF-8 byte truncation and invalidates the released protocol ID', async () => {
     const events: unknown[] = []
     const terminals = host(async (event) => {
       events.push(event)
@@ -64,12 +63,6 @@ describe('ACP v1 terminal host', () => {
     await expect(
       terminals.terminalOutput({ sessionId: 'acp-terminal-1', terminalId: created.terminalId }),
     ).rejects.toThrow('unknown or already released')
-    expect(terminals.presentationSnapshot?.(created.terminalId)).toMatchObject({
-      terminalId: created.terminalId,
-      released: true,
-      output: output.output,
-      truncated: output.truncated,
-    })
     expect(events.map((event) => (event as { operation: string }).operation)).toEqual([
       'create',
       'exit',
@@ -117,7 +110,6 @@ describe('ACP v1 terminal host', () => {
       cwd: root,
     })
     await terminals.releaseTerminal({ sessionId: 'release-session', terminalId: created.terminalId })
-    expect(terminals.presentationSnapshot?.(created.terminalId)?.released).toBe(true)
     await expect(
       terminals.killTerminal({ sessionId: 'release-session', terminalId: created.terminalId }),
     ).rejects.toThrow('unknown or already released')
@@ -140,8 +132,7 @@ describe('ACP v1 terminal host', () => {
     await terminals.dispose()
   })
 
-  it('bounds active terminals and released presentation snapshots', async () => {
-    const handles: AcpSubprocessHandle[] = []
+  it('bounds active terminals and frees their slots after release', async () => {
     const fake: SubprocessSeam = {
       spawn: () => {
         const handle: AcpSubprocessHandle = {
@@ -152,7 +143,6 @@ describe('ACP v1 terminal host', () => {
           terminate: () => {},
           waitForExit: async () => true,
         }
-        handles.push(handle)
         return handle
       },
       resolveExecutable: async (command) => command,
@@ -171,25 +161,15 @@ describe('ACP v1 terminal host', () => {
     await expect(terminals.createTerminal({ sessionId: 'bounded-session', command: 'fake' })).rejects.toThrow(
       'active terminal limit',
     )
+    const releasedId = active[0]!.terminalId
+    await terminals.releaseTerminal({ sessionId: 'bounded-session', terminalId: releasedId })
+    await expect(terminals.terminalOutput({ sessionId: 'bounded-session', terminalId: releasedId })).rejects.toThrow(
+      'unknown or already released',
+    )
+    await expect(terminals.createTerminal({ sessionId: 'bounded-session', command: 'fake' })).resolves.toHaveProperty(
+      'terminalId',
+    )
     await terminals.dispose()
-
-    const snapshots = createAcpTerminalHandlers({
-      subprocess: fake,
-      profileId: 'snapshots',
-      dshSessionId: 'dsh-snapshots',
-      cwd: root,
-      env: {},
-    })
-    const ids: string[] = []
-    for (let i = 0; i < ACP_TERMINAL_PRESENTATION_MAX_COUNT + 1; i += 1) {
-      const created = await snapshots.createTerminal({ sessionId: 'snapshot-session', command: 'fake' })
-      ids.push(created.terminalId)
-      await snapshots.releaseTerminal({ sessionId: 'snapshot-session', terminalId: created.terminalId })
-    }
-    expect(snapshots.presentationSnapshot?.(ids[0]!)).toBeUndefined()
-    expect(snapshots.presentationSnapshot?.(ids.at(-1)!)).toMatchObject({ released: true })
-    await snapshots.dispose()
-    expect(active).toHaveLength(ACP_TERMINAL_MAX_ACTIVE)
   })
 
   it('disposes many terminals concurrently under one shared deadline', async () => {
@@ -294,12 +274,16 @@ describe('ACP v1 terminal host', () => {
       terminals.releaseTerminal({ sessionId: 'range-session', terminalId: created.terminalId }),
     ).rejects.toThrow('retry release')
     expect(terminations).toBe(1)
-    expect(terminals.presentationSnapshot?.(created.terminalId)?.released).toBe(false)
+    await expect(
+      terminals.terminalOutput({ sessionId: 'range-session', terminalId: created.terminalId }),
+    ).resolves.toHaveProperty('output')
     observable = true
     await expect(
       terminals.releaseTerminal({ sessionId: 'range-session', terminalId: created.terminalId }),
     ).resolves.toEqual({})
-    expect(terminals.presentationSnapshot?.(created.terminalId)?.released).toBe(true)
+    await expect(
+      terminals.terminalOutput({ sessionId: 'range-session', terminalId: created.terminalId }),
+    ).rejects.toThrow('unknown or already released')
     await terminals.dispose()
   })
 
@@ -433,6 +417,7 @@ describe('ACP v1 terminal host', () => {
   })
 
   it('reports a rejected spawn as error instead of a running terminal', async () => {
+    const events: unknown[] = []
     const error = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT', syscall: 'spawn missing-binary' })
     const fake: SubprocessSeam = {
       spawn: () => ({
@@ -451,6 +436,9 @@ describe('ACP v1 terminal host', () => {
       dshSessionId: 'dsh-error',
       cwd: root,
       env: {},
+      audit: async (event) => {
+        events.push(event)
+      },
     })
     const created = await terminals.createTerminal({
       sessionId: 'error-session',
@@ -463,7 +451,7 @@ describe('ACP v1 terminal host', () => {
     await expect(
       terminals.terminalOutput({ sessionId: 'error-session', terminalId: created.terminalId }),
     ).resolves.toMatchObject({ output: '', exitStatus: null })
-    expect(terminals.presentationSnapshot?.(created.terminalId)).toMatchObject({ state: 'error' })
+    expect(events).toContainEqual(expect.objectContaining({ operation: 'exit', outcome: 'error' }))
     await terminals.dispose()
   })
 })
@@ -629,7 +617,9 @@ describe('ACP terminal native job lifecycle', () => {
     await expect(terminals.releaseTerminal({ sessionId: 'acp', terminalId })).rejects.toThrow('retry release')
     rangeExited = true
     await expect(terminals.releaseTerminal({ sessionId: 'acp', terminalId })).resolves.toEqual({})
-    expect(terminals.presentationSnapshot?.(terminalId)).toMatchObject({ released: true })
+    await expect(terminals.terminalOutput({ sessionId: 'acp', terminalId })).rejects.toThrow(
+      'unknown or already released',
+    )
     await terminals.dispose()
   })
 

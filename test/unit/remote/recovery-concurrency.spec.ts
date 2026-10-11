@@ -33,7 +33,6 @@ function createService(adapter: AcpRecoveryAdapterLike, state = recovery) {
   const stateRead = vi.fn(async (sessionId: string) => ({ ...state, dshSessionId: sessionId }))
   const service = new AcpRemoteService(new Context(), {
     registry: { agents: () => new Map(), probeCacheFor: () => undefined },
-    resolveLiveAgent: () => undefined,
     ownedSessionReadGate: () => true,
     backendFacts: {
       readBindingProvider: async () => 'acp-codex',

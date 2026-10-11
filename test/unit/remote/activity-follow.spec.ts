@@ -33,7 +33,6 @@ function createService(source: {
 }) {
   return new AcpRemoteService(new Context(), {
     registry: { agents: () => new Map(), probeCacheFor: () => undefined },
-    resolveLiveAgent: () => undefined,
     ownedSessionReadGate: source.ownedSessionReadGate ?? (() => true),
     ...(source.activityReadStatus === undefined ? {} : { activityReadStatus: source.activityReadStatus }),
     activityTimeline: {

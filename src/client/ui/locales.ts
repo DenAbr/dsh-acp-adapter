@@ -1,7 +1,7 @@
 /**
- * Copy dictionaries for the ACP plugin detail panel. Precedent:
+ * Copy dictionaries for ACP configuration, conversations, Teams, and diagnostics. Precedent:
  * ui-settings-models/src/client/locales.ts — one flat template-string map per
- * locale, keyed by a union type the panel's `t` seat is narrowed to.
+ * locale, keyed by a union type each component's `t` seat is narrowed to.
  *
  * 用户可见文案保持简短；协议和产品边界由 README 维护。
  */

@@ -1,4 +1,10 @@
-# 2026-09-24 DSH 0.1.7-rc.1 迁移
+# 历史回归记录
+
+本页保留历史验收快照，不表示当前版本的验证状态。复现步骤与验收矩阵统一维护在 [E2E 指南](README.md)；后续逐次结果记录在对应 PR／CI，避免重复维护测试数量、本机路径和发布状态。
+
+`0.1.6-alpha.1.4` 的变更见 [PR #6](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/pull/6)，自动检查见 [PR CI](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/actions/runs/35117367723)，发布状态见 [发布工作流](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/actions/runs/35119168694)。该次本机验收明细可在 [当时提交的记录](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/ce1893edd49dfc333cb8b0bc64d566308b41c39b/test/e2e/REGRESSION.md) 中追溯；其中候选包和未发布状态属于当时快照。真实模型、本机 Electron 与 CI 协议夹具结果不可相互替代。
+
+## 2026-09-24 DSH 0.1.7-rc.1 迁移
 
 目标为正式 npm `0.1.7-rc.1` 与源码标签 `dsh-v0.1.7-rc.1`；候选分支 `codex/dsh-0.1.7-rc.1-compat`。Luna 分别实施依赖、Teams 和活动流修复，主审查者复核后集成。未修改插件发布版本，未发布 npm 或更新桌面内置 pin。
 
@@ -22,7 +28,7 @@ Linux CI 随后发现两项模式切换断言的时序竞争：宿主设置写�
 
 上游 RC API account controller 仍显式依赖 alpha.1 的 account 包，而其他 RC 包需要其 RC peer。锁文件保留上游依赖关系，干净安装、跨平台类型／构建及宿主启动均通过；未添加直接 account 依赖掩盖此拓扑。成功 assistant/message 到 step/end 之间的瞬态保留由 RC 原生测试覆盖；本插件的完整流回归覆盖最终收敛和取消，尚无单独暂停该内部时间窗口的浏览器断言。
 
-# 2026-09-23 整体 ACP 实现审查
+## 2026-09-23 整体 ACP 实现审查
 
 宿主：正式 npm 与源码标签 `0.1.7-alpha.2`；分支 `feature/ZAI-88`。本轮检查覆盖执行与恢复、协议生命周期、输入与配置时序、审批、DSH 工具桥、文件/终端、Sidecar、主会话归一化展示、配置与分发。
 
@@ -41,15 +47,7 @@ Linux CI 随后发现两项模式切换断言的时序竞争：宿主设置写�
 
 Windows 的真实 Devin 回归未执行：受保护的 `devin-e2e` GitHub 环境未授权 `feature/ZAI-88` 使用 secrets。本轮没有更改该环境保护规则，没有上传本机凭证，也未将本机测试当成跨平台结论。详细实现边界见中英文 [原生复用说明](../../docs/native-reuse.md)。
 
-# 历史回归记录
-
-本页保留历史验收快照，不表示当前版本的验证状态。复现步骤与验收矩阵统一维护在 [E2E 指南](README.md)；后续逐次结果记录在对应 PR／CI，避免重复维护测试数量、本机路径和发布状态。
-
-`0.1.6-alpha.1.4` 的变更见 [PR #6](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/pull/6)，自动检查见 [PR CI](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/actions/runs/35117367723)，发布状态见 [发布工作流](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/actions/runs/35119168694)。该次本机验收明细可在 [当时提交的记录](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/ce1893edd49dfc333cb8b0bc64d566308b41c39b/test/e2e/REGRESSION.md) 中追溯；其中候选包和未发布状态属于当时快照。真实模型、本机 Electron 与 CI 协议夹具结果不可相互替代。
-
----
-
-# 2026-09-16 消息顺序与成员卡片
+## 2026-09-16 消息顺序与成员卡片
 
 宿主：正式 `dsh-v0.1.6-alpha.1`；本地插件候选，未修改版本或发布。浏览器使用 Chrome 与 Claude、Codex、Devin、Kimi 四类本地 ACP 协议夹具，不调用真实模型。
 
@@ -73,7 +71,7 @@ Windows 的真实 Devin 回归未执行：受保护的 `devin-e2e` GitHub 环境
 
 实际页面截图保存在 `.local/message-order-review/`：`stream.live.png`、`stream.en.png`、`members.zh.png`、`members.en.png`。测试实例关闭后截图保留，未操作用户原有 Chrome 窗口。
 
-# 2026-09-15 macOS 桌面成品回归
+## 2026-09-15 macOS 桌面成品回归
 
 本轮在独立 DSH_HOME 中运行实际打包的 macOS arm64 Electron 应用。核心来自桌面仓库当前构建，插件来自本地 tarball；未改生产插件版本 pin、未发布 npm。测试使用 Devin、Kimi、Codex、Claude 四种本地 ACP 协议夹具，不调用真实模型服务。
 
@@ -103,7 +101,7 @@ Windows 的真实 Devin 回归未执行：受保护的 `devin-e2e` GitHub 环境
 
 当前生产 pin 仍指向旧的已发布 ACP adapter；本地候选与 npm 同名同版本不代表内容一致。正式桌面分发前必须发布包含修复的新插件版本、更新 pin/integrity 并重跑成品检查，不能直接把本地候选通过宣称为现有 npm 组合可发布。
 
-# 2026-09-15 RPC 元数据兼容修复
+## 2026-09-15 RPC 元数据兼容修复
 
 问题：上游 `e459e3263733075bd806d9ba6dd92bbc4bf3983f` 将严格 codec 从 `schema` 改为 `create()`，但源码版本仍为 `0.1.6-alpha.1`。已发布 adapter 的旧生成产物无法通过新 Loader 校验；不是桌面 UI 专属问题。
 
@@ -119,18 +117,18 @@ Windows 的真实 Devin 回归未执行：受保护的 `devin-e2e` GitHub 环境
 
 这一阶段仅验证 RPC 兼容路径；后续完整桌面验证见本文件开头的成品回归记录。未对该上游提交的全部功能作兼容性承诺，没有重新调用真实模型，也未发布 npm 版本。
 
-# 0.1.3-alpha.1 重构验收
+## 0.1.3-alpha.1 重构验收
 
 验收日期：2026-09-05。宿主为 `dsh-v0.1.3-alpha.1`（`d347e70390`），上游跟踪文件未修改。此次完成源码适配；插件尚未发布新的 npm 兼容版本。
 
-## 实现范围
+### 实现范围
 
 - 外部子代理投影采用 SessionHandle，持有写句柄完成追加、flush 和关闭；重复投影、部分写入恢复及旧 sidecar 恢复均有验证。新记录用上游 AssistantStreamAccumulator 生成 v2 stream，删除旧 readRaw 可见性补丁。
 - 当前 DSH 步骤中已落盘的插件消息、动态上下文和用户输入均传入 ACP，支持插件驱动的后续步骤；旧用户输入不会重发。宿主 system prompt 每次完整传递为标注清楚的当前指令。
 - 会话流、输入栏、审批、模型选择及子代理只读详情继续使用原生组件；外部工具活动归一化为原生 Terminal、Read、Diff 展示，不制造 DSH 工具执行。
 - 认证错误同时提示检查 Agent 登录和 ACP 连接设置，避免把仅依赖父进程令牌的认证失败误导为必须重新登录。
 
-## 原生能力复用与精简
+### 原生能力复用与精简
 
 后续精简删除了本地 `abortAfter` 和 `AcpDeadline`，退出等待与版本探针改用 `dsh-timeout.deadline()` 及同步资源释放；读写 SessionHandle 改用 `await using`，继续保证 flush 和写句柄释放均成功后才发布投影完成状态。生产源码净减少 55 行（含注释），新增一个直接宿主依赖；未新增迁移包或放宽发布范围。
 
@@ -138,7 +136,7 @@ Windows 的真实 Devin 回归未执行：受保护的 `devin-e2e` GitHub 环境
 
 试接 `sessionFormatV1ToV2.migrate()` 时，既有 sidecar 夹具因 `turn/start 1 data has unexpected member "trigger"` 被上游拒绝。这些插件历史记录不能直接当作上游规范化的 v1 artifact 迁移。最终保留旧 sidecar 摘要校验后的专用恢复路径，断言恢复后所有事件（包括 trigger）与原 sidecar 均保持原有内容，仅补入预期的空 stream。
 
-## 最终验证结果
+### 最终验证结果
 
 | 检查                                       | 结果                                                   |
 | ------------------------------------------ | ------------------------------------------------------ |
@@ -160,13 +158,13 @@ Windows 的真实 Devin 回归未执行：受保护的 `devin-e2e` GitHub 环境
 
 本机类型检查、常规测试和构建使用 Node 24.19.0；实际 DSH Web、浏览器测试及安装启动使用 Node 22.19.0 和已安装的 Chrome。该 macOS 环境中的 fs-ext 原生构建使用 Node 22 ABI。CI 配置固定源码标签，在三平台验证源码；浏览器固定夹具在 Linux 运行。此处没有把 CI 配置等同于已经执行的跨平台验证。
 
-## Claude 调查结果
+### Claude 调查结果
 
 最初目录查询成功，但生成返回 `ACP_AUTH_REQUIRED`。仅检查配置字段的存在性后确认：`ANTHROPIC_AUTH_TOKEN` 存在于父进程环境，Claude 用户设置没有配置对应凭据。DSH subprocess 按已有规则过滤父进程的密钥变量，因此模型别名与端点设置可见，认证令牌没有进入 ACP 子进程。
 
 经用户授权，将同一现有令牌显式放入临时测试 profile 后，同一 `haiku` 模型通过验证；无需修改持久化、流协议或用户的正式 Agent 配置。测试使用 `DSH_E2E_LIVE_CLAUDE_ENV_KEYS=ANTHROPIC_AUTH_TOKEN`，只保存变量名和脱敏结果，临时 profile 在测试结束后清理。生产使用仍需显式配置该 Agent 的连接凭据。
 
-## 接口与发布边界
+### 接口与发布边界
 
 ACP v1 没有 system 消息角色，因此宿主指令作为请求上下文传递，不能保证其拥有外部 Agent system prompt 的优先级。外部 Agent 的工具、技能加载和 MCP 执行仍由该 Agent 管理；ACP 没有通用宿主工具执行回调，工具通知不能当作 DSH 执行请求。原生 provider 的工具执行及其插件 hooks 已通过真实 ToolRuntime 对照验证。
 

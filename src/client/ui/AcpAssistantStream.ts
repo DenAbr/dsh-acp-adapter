@@ -27,7 +27,6 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   ActivityRow,
-  completedProjectedChild,
   visibleActivityRows,
   activityJournalSessionId,
   renderNativeActivityTool,
@@ -44,10 +43,7 @@ import {
 } from './acp-chat-normalization.ts'
 export { activityBoundaries, finalAnswerStart } from './acp-chat-normalization.ts'
 
-type Dependencies = Pick<
-  ActivityNodeProps,
-  'journalHub' | 't' | 'onProjectedChild' | 'onOpenProjectedChild' | 'jsonStringWrapping'
->
+type Dependencies = Pick<ActivityNodeProps, 'journalHub' | 't' | 'onOpenProjectedChild' | 'jsonStringWrapping'>
 type NativeChatProps = ChatViewSlotProps & PropsRenderFactories
 
 class SnapshotSource<T> {
@@ -319,10 +315,6 @@ function NormalizedChat({
           next.set(key, nextWindow)
           return next
         })
-        for (const row of rows) {
-          const child = completedProjectedChild(row)
-          if (child !== undefined) dependencies.onProjectedChild?.(child.parentSessionId, child.childSessionId)
-        }
       },
     )
   }, [signature, props.sessionId, dependencies, subscriptions])

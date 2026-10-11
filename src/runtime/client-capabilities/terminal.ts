@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import type * as acp from '@agentclientprotocol/sdk'
 import type { AcpSubprocessExitFact, AcpSubprocessHandle, SubprocessSeam } from '../../runtime/process/subprocess.ts'
-import type { AcpTerminalHandlers as AcpTerminalHandlerFace } from '../../protocol/v1/types.ts'
+import type { AcpTerminalHandlers } from '../../protocol/v1/types.ts'
 import type { AcpTerminalAuditData } from '../../domain/policy/events.ts'
 import type { AcpTerminalJobHooks, AcpTerminalJobStarter } from './terminal-job.ts'
 
@@ -24,25 +24,7 @@ import type { AcpTerminalJobHooks, AcpTerminalJobStarter } from './terminal-job.
 export const ACP_TERMINAL_DEFAULT_OUTPUT_BYTES = 1_048_576
 export const ACP_TERMINAL_MAX_OUTPUT_BYTES = 8 * 1_024 * 1_024
 export const ACP_TERMINAL_RELEASE_WAIT_MS = 10_000
-export const ACP_TERMINAL_PRESENTATION_MAX_COUNT = 128
-export const ACP_TERMINAL_PRESENTATION_MAX_BYTES = 8 * 1_024 * 1_024
 export const ACP_TERMINAL_MAX_ACTIVE = 64
-
-export interface AcpTerminalHandlers extends AcpTerminalHandlerFace {
-  /** A read-only snapshot for a future UI presentation seam. */
-  readonly presentationSnapshot?: (terminalId: string) => AcpTerminalPresentationSnapshot | undefined
-}
-
-export interface AcpTerminalPresentationSnapshot {
-  readonly terminalId: string
-  readonly command: string
-  readonly cwd: string
-  readonly output: string
-  readonly truncated: boolean
-  readonly exitStatus: acp.TerminalExitStatus | null
-  readonly state: 'running' | 'completed' | 'error'
-  readonly released: boolean
-}
 
 export interface AcpTerminalHandlersOptions {
   readonly subprocess: SubprocessSeam
@@ -124,7 +106,6 @@ interface TerminalRecord {
   exit: AcpSubprocessExitFact | null
   released: boolean
   killRequested: boolean
-  releasedAt?: number
   error?: Error
   auditTail: Promise<void>
   releasePromise?: Promise<boolean>
@@ -173,10 +154,6 @@ function exitStatus(exit: AcpSubprocessExitFact | null): acp.TerminalExitStatus 
   return exit === null ? null : { exitCode: exit.exitCode, signal: exit.signal }
 }
 
-function terminalState(record: Pick<TerminalRecord, 'exit' | 'error'>): AcpTerminalPresentationSnapshot['state'] {
-  return record.error !== undefined ? 'error' : record.exit === null ? 'running' : 'completed'
-}
-
 function auditEvent(
   record: TerminalRecord,
   operation: AcpTerminalAuditData['operation'],
@@ -208,23 +185,8 @@ function attachOutput(stream: Readable | undefined, append: (chunk: unknown) => 
 /** Create a per-connection ACP v1 terminal host. */
 export function createAcpTerminalHandlers(options: AcpTerminalHandlersOptions): AcpTerminalHandlers {
   const active = new Map<string, TerminalRecord>()
-  const released = new Map<string, AcpTerminalPresentationSnapshot>()
   let disposed = false
   const releaseWaitMs = options.releaseWaitMs ?? ACP_TERMINAL_RELEASE_WAIT_MS
-
-  const refreshReleasedSnapshot = (record: TerminalRecord): void => {
-    if (!record.released) return
-    const previous = released.get(record.id)
-    if (previous === undefined) return
-    released.set(record.id, {
-      ...previous,
-      output: record.output.text(),
-      truncated: record.output.truncated,
-      exitStatus: exitStatus(record.exit),
-      state: terminalState(record),
-    })
-    pruneReleased()
-  }
 
   const recordAudit = (
     record: TerminalRecord,
@@ -353,11 +315,9 @@ export function createAcpTerminalHandlers(options: AcpTerminalHandlersOptions): 
         record.handle = nextHandle
         attachOutput(nextHandle.stdout, (chunk) => {
           record.output.append(chunk)
-          refreshReleasedSnapshot(record)
         })
         attachOutput(nextHandle.stderr, (chunk) => {
           record.output.append(chunk)
-          refreshReleasedSnapshot(record)
         })
         // ACP v1 exposes no terminal stdin method. Closing stdin prevents commands
         // that read input from remaining alive forever while the Agent only polls output.
@@ -385,7 +345,6 @@ export function createAcpTerminalHandlers(options: AcpTerminalHandlersOptions): 
       record.done = settleProcess().then(
         (fact) => {
           record.exit = fact
-          refreshReleasedSnapshot(record)
           void recordAudit(record, 'exit', 'exited')
           return fact
         },
@@ -449,36 +408,14 @@ export function createAcpTerminalHandlers(options: AcpTerminalHandlersOptions): 
         return false
       }
       record.released = true
-      record.releasedAt = Date.now()
       active.delete(record.id)
-      const snapshot: AcpTerminalPresentationSnapshot = {
-        terminalId: record.id,
-        command: record.command,
-        cwd: record.cwd,
-        output: record.output.text(),
-        truncated: record.output.truncated,
-        exitStatus: exitStatus(record.exit),
-        state: terminalState(record),
-        released: true,
-      }
-      released.set(record.id, snapshot)
-      pruneReleased()
-      // Keep the embedded display snapshot, but no protocol operation may use
-      // the released ID again. A durable release audit is the final operation.
+      // No protocol operation may use the released ID again.
+      // A durable release audit is the final operation.
       await recordAudit(record, 'release', 'released')
       await record.auditTail
       return true
     })()
     return await record.releasePromise
-  }
-
-  const pruneReleased = (): void => {
-    let bytes = [...released.values()].reduce((sum, snapshot) => sum + Buffer.byteLength(snapshot.output, 'utf8'), 0)
-    for (const [id, snapshot] of released) {
-      if (released.size <= ACP_TERMINAL_PRESENTATION_MAX_COUNT && bytes <= ACP_TERMINAL_PRESENTATION_MAX_BYTES) break
-      released.delete(id)
-      bytes -= Buffer.byteLength(snapshot.output, 'utf8')
-    }
   }
 
   const releaseTerminal = async (params: acp.ReleaseTerminalRequest): Promise<acp.ReleaseTerminalResponse> => {
@@ -510,24 +447,6 @@ export function createAcpTerminalHandlers(options: AcpTerminalHandlersOptions): 
     await Promise.all(records.map((record) => releaseOne(record, deadline)))
   }
 
-  const presentationSnapshot = (terminalId: string): AcpTerminalPresentationSnapshot | undefined => {
-    const activeRecord = active.get(terminalId)
-    const snapshot = released.get(terminalId)
-    if (activeRecord === undefined && snapshot !== undefined) return snapshot
-    const record = activeRecord
-    if (record === undefined) return undefined
-    return {
-      terminalId,
-      command: record.command,
-      cwd: record.cwd,
-      output: record.output.text(),
-      truncated: record.output.truncated,
-      exitStatus: exitStatus(record.exit),
-      state: terminalState(record),
-      released: record.released,
-    }
-  }
-
   return {
     createTerminal,
     terminalOutput,
@@ -537,6 +456,5 @@ export function createAcpTerminalHandlers(options: AcpTerminalHandlersOptions): 
     cancelSession,
     releaseSession,
     dispose,
-    presentationSnapshot,
   }
 }

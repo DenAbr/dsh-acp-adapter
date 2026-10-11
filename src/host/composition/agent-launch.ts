@@ -36,7 +36,6 @@ export async function prepareAgentLaunch(
   try {
     const plan = buildAcpSpawnPlan({
       mode: 'danger-full-access',
-      workspaceRoot: cwd,
       argv: [config.command, ...config.args],
       env,
     })

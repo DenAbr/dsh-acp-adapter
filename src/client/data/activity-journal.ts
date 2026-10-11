@@ -17,10 +17,6 @@ export class AcpActivityJournalStore {
   private readonly rowsByAnchor = new Map<string, Map<string, AcpActivityView>>()
   private cursor = 0
 
-  get head(): number {
-    return this.cursor
-  }
-
   replace(head: number, activities: readonly AcpActivityView[]): void {
     this.rows.clear()
     this.rowsByAnchor.clear()

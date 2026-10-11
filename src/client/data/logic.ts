@@ -1,12 +1,9 @@
 /**
- * Pure logic for the ACP settings panel (release contract , ).
+ * Pure settings-panel validation and defensive Remote payload decoding.
  *
- * No DOM, fetch, or React imports: every export here is directly
- * vitest-testable without jsdom ( drives this module). The wire and
- * profile identities use the shared browser-safe contract. Other decoders validate the host contracts
- * (src/host/composition/installed-profile-registry.ts, src/contract/remote.ts, and ACP schema v1 for AuthMethod) — the
- * client bundle must not import host modules: they target Node, and a value
- * import would be inlined into the browser bundle.
+ * No DOM, fetch, React, or Host implementation imports. Profile identities and
+ * wire shapes follow the shared browser-safe contracts; decoders reject
+ * malformed payloads before they reach the view.
  * @module @zaimokuza/dsh-acp-adapter/client/logic
  */
 
@@ -38,11 +35,9 @@ export interface AcpSettings {
 export const ACP_ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
- * 疑似 secret 的 env 键名 pattern（client 侧镜像 host
- * src/runtime/process/subprocess.ts 的 `ACP_SENSITIVE_ENV_PATTERN`——client
- * 半禁 import host 模块，口径注释同步）。命中的键在编辑器里**不回显值**，只按
- * 键名 + 「已配置」状态展示；原值经草稿的 `maskedEnv` 携带过站（保存时原样
- * 挂回，除非用户在文本框里同名重填或在掩码行上点移除）。
+ * Mask likely secret env values in the editor. Existing values travel through
+ * `maskedEnv` and are preserved on save unless explicitly replaced or removed.
+ * This display rule does not control the Host subprocess environment.
  */
 export const ACP_SECRET_ENV_KEY_PATTERN = /KEY|PASSWORD|SECRET|TOKEN/i
 
@@ -52,7 +47,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null
 }
 
-// ---------- 编辑器草稿（staged text，保存时才解析成配置；card-form.ts 先例） ----------
+// ---------- Editor drafts: staged text parsed only on save ----------
 
 /** The agent editor's staged text: what is on screen is exactly what a save parses. */
 export interface AgentDraft {
@@ -141,7 +136,7 @@ export function draftFromAgent(id: string, config: AcpAgentConfig): AgentDraft {
 }
 
 /**
- * 移除草稿里一条掩码 env 键（UI 的「移除」按钮；）。返回新草稿对象；
+ * 移除草稿里一条掩码 env 键（UI 的「移除」按钮）。返回新草稿对象；
  * 移除最后一个键时 `maskedEnv` 字段整体缺席（保持「无掩码 = 字段不在」的
  * 单一形态，validate/序列化两侧都不用特判空对象）。
  */
@@ -176,8 +171,7 @@ export type EnvParseFailure =
 /**
  * Parse the env textarea: one `KEY=VALUE` per line (split on the FIRST `=`),
  * blank lines ignored, key trimmed and required to be a shell identifier,
- * value kept verbatim after the line trim（起值为纯字面——
- * `$credential:` 引用语法已随 host 侧一同移除）。
+ * value kept verbatim after the line trim.
  * @param text - the staged env text.
  * @returns the env map, or the first offending line (1-based).
  */
@@ -240,7 +234,7 @@ export interface DraftValidation {
 
 /**
  * Validate a staged draft against the host schema's rules plus id uniqueness
- * and the built-in runtime singleton (：同一内置 runtime 至多一个 profile，
+ * and the built-in runtime singleton（同一内置 runtime 至多一个 profile，
  * client 侧先检——host schema 的同款跨条目拒绝兜底绕过 UI 的直写）。
  * The row being edited keeps its own id/runtime (`editingId`) without tripping
  * the taken checks.
@@ -413,7 +407,7 @@ export interface AcpCapabilityMatrixRow {
   note?: string
 }
 
-/** probe 失败阶段（四层分层判据；镜像 src/protocol/v1/types.ts `AcpProbePhase`）。 */
+/** Probe failure stage, matching `AcpProbePhase` in src/protocol/v1/types.ts. */
 export type AcpProbePhase = 'initialize' | 'session'
 
 /** One provider row of the dshAcp Remote `health` view (src/contract/remote.ts). */
@@ -425,7 +419,7 @@ export interface AcpProviderHealth {
   loginHint: string | null
   executable: boolean
   version: string | null
-  /** 五态状态（host 侧 deriveAcpAgentState 派生）。 */
+  /** Configuration state derived by the Host. */
   state: AcpAgentConfigState
   probe:
     | { status: 'never'; at: null }

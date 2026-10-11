@@ -58,7 +58,6 @@ function service(extra: Partial<AcpRemoteServiceDeps> = {}) {
   const ctx = new Context()
   const instance = new AcpRemoteService(ctx, {
     registry: registry(),
-    resolveLiveAgent: () => undefined,
     checkExecutable: async () => true,
     queryVersion: async () => '1.0.0',
     ...extra,
@@ -170,6 +169,35 @@ describe('AcpRemoteService current public surface', () => {
     await expect(instance.boundSessions('devin')).resolves.toEqual({ agentId: 'devin', count: 2 })
   })
 
+  it('reads backend identity from bindings and request headers, preserving blank and missing session boundaries', async () => {
+    let bound: string | undefined = 'acp-devin'
+    let header: string | undefined = 'deepseek'
+    let readable = true
+    let live = true
+    const readHeader = vi.fn(async () => {
+      if (!readable) throw new Error('session unavailable')
+      return header
+    })
+    const { instance } = service({
+      backendFacts: {
+        readBindingProvider: async () => bound,
+        peekHeaderProvider: readHeader,
+        hasLiveAgent: () => live,
+      },
+    })
+    await expect(instance.backendOf('s1')).resolves.toEqual({ state: 'established', provider: 'acp-devin' })
+    expect(readHeader).not.toHaveBeenCalled()
+    bound = undefined
+    header = 'acp-codex'
+    await expect(instance.backendOf('s1')).resolves.toEqual({ state: 'established', provider: 'acp-codex' })
+    header = undefined
+    await expect(instance.backendOf('s1')).resolves.toEqual({ state: 'blank' })
+    readable = false
+    await expect(instance.backendOf('s1')).resolves.toEqual({ state: 'blank' })
+    live = false
+    await expect(instance.backendOf('s1')).rejects.toMatchObject({ code: 'dsh-acp/config' })
+  })
+
   it('preserves ACP taxonomy and diagnostics as typed RemoteError details', async () => {
     const { instance } = service()
     await expect(instance.backendOf('missing')).rejects.toMatchObject({
@@ -239,7 +267,6 @@ describe('AcpRemoteService current public surface', () => {
     }))
     const recoveryAction = vi.fn(async () => {})
     const readBinding = vi.fn(async () => 'acp-devin')
-    const readLiveAgent = vi.fn(() => undefined)
     const { instance } = service({
       ownedSessionReadGate: async () => false,
       backendFacts: {
@@ -247,7 +274,6 @@ describe('AcpRemoteService current public surface', () => {
         peekHeaderProvider: async () => undefined,
         hasLiveAgent: () => false,
       },
-      resolveLiveAgent: readLiveAgent,
       agentSessionControl: () => ({ agentSessionSnapshot: controlSnapshot, setAgentSessionOption: setOption }),
       recoveryStateStore: { read: readRecovery },
       recoveryAdapter: () => ({ retryOriginal: recoveryAction, rebindBlank: recoveryAction }),
@@ -268,7 +294,6 @@ describe('AcpRemoteService current public surface', () => {
     expect(controlSnapshot).not.toHaveBeenCalled()
     expect(setOption).not.toHaveBeenCalled()
     expect(readRecovery).not.toHaveBeenCalled()
-    expect(readLiveAgent).not.toHaveBeenCalled()
     expect(recoveryAction).not.toHaveBeenCalled()
     expect(readBinding).not.toHaveBeenCalled()
 

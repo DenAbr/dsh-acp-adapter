@@ -30,7 +30,6 @@ function service() {
   )
   const remote = new AcpRemoteService(new Context(), {
     registry: { agents: () => new Map(), probeCacheFor: () => undefined },
-    resolveLiveAgent: () => undefined,
     activityAccess: (id) => id === 'session',
     activityTimeline: {
       snapshot: async () => [large],

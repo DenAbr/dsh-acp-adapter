@@ -38,7 +38,6 @@ import { followNativeTeamUi } from './ui/native-team-ui-lifecycle.ts'
 import { resolveCrossBackendLocation } from './data/cross-backend-controller.ts'
 import { AcpPanelController } from './data/controller.ts'
 import { ManagedAcpRouteCatalog } from './data/managed-routes.ts'
-import { ProjectedSubagentCatalog } from './data/projected-subagents.ts'
 import { createAcpPanelStore } from './data/stores/panel-store.ts'
 import type { AcpPanelStoreActions } from './data/stores/panel-store.ts'
 import { AcpSection } from './ui/AcpSection.ts'
@@ -96,11 +95,6 @@ async function registerUi(ctx: ClientContext): Promise<void> {
   }
   const settingsScope = ctx.configForms.get<AcpSettings>(ACP_SETTINGS_NS)
   const ownedRoutes = await acpRemote.ownedProviderRoutes().catch(() => undefined)
-  const projectedIds = await acpRemote.projectedSubagentIds().catch(() => undefined)
-  const projectedSubagents = new ProjectedSubagentCatalog(
-    acpRemote,
-    projectedIds?.ok === true ? projectedIds.value.sessionIds : [],
-  )
   const managedRoutes = new ManagedAcpRouteCatalog(
     settingsScope,
     ownedRoutes?.ok === true ? ownedRoutes.value.providers : [],
@@ -233,9 +227,6 @@ async function registerUi(ctx: ClientContext): Promise<void> {
     journalHub,
     t: ctx.locale.bind('acpActivity'),
     jsonStringWrapping,
-    onProjectedChild: (_parentSessionId, childSessionId) => {
-      projectedSubagents.add(childSessionId)
-    },
     onOpenProjectedChild: openProjectedChild,
   })
   ctx.slots.inject('conversation.chat.node', () =>
@@ -246,14 +237,10 @@ async function registerUi(ctx: ClientContext): Promise<void> {
         locale: 'acpActivity',
         inject: (): {
           readonly journalHub: AcpActivityJournalHub
-          readonly onProjectedChild: (parentSessionId: string, childSessionId: string) => void
           readonly onOpenProjectedChild: (parentSessionId: string, childSessionId: string) => void
           readonly jsonStringWrapping: AcpJsonStringWrapping
         } => ({
           journalHub,
-          onProjectedChild: (_parentSessionId, childSessionId) => {
-            projectedSubagents.add(childSessionId)
-          },
           onOpenProjectedChild: openProjectedChild,
           jsonStringWrapping,
         }),
@@ -262,7 +249,7 @@ async function registerUi(ctx: ClientContext): Promise<void> {
     ),
   )
   const coordinator = new CrossBackendCoordinator(ctx, managedRoutes.owns)
-  // RC publishes team identity through the shared Session projection. The ACP
+  // DSH publishes team identity through the shared Session projection. The ACP
   // Remote remains responsible for ACP-specific metadata and authorized writes.
   ctx.inject(['remote.subagents', 'uiSession'], (teamCtx) => {
     const actions: AcpTeamApprovalActions = {

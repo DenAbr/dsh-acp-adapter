@@ -19,9 +19,12 @@ it('retains host-confirmed ownership while the native form is loading or unavail
   expect(catalog.owns('acp-unowned')).toBe(false)
   snapshot = { ...snapshot, value: { agents: { custom: { name: 'Custom', command: 'custom', args: [], env: {} } } } }
   publish()
-  expect([...catalog.snapshot()]).toEqual(['acp-saved', 'acp-custom'])
+  expect(catalog.owns('acp-saved')).toBe(true)
+  expect(catalog.owns('acp-custom')).toBe(true)
+  expect(catalog.owns('acp-unowned')).toBe(false)
   snapshot = { ...snapshot, value: { agents: {} } }
   publish()
-  expect([...catalog.snapshot()]).toEqual(['acp-saved'])
+  expect(catalog.owns('acp-saved')).toBe(true)
+  expect(catalog.owns('acp-custom')).toBe(false)
   catalog.dispose()
 })

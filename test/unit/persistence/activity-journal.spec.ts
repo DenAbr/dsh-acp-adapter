@@ -374,8 +374,11 @@ describe('ACP client activity journal cursor', () => {
     const store = new AcpActivityJournalStore()
     store.replace(2, [row(2, 'tool-1', 'running')])
     store.append(row(3, 'tool-1', 'completed'))
-    expect(store.head).toBe(3)
-    expect(store.values('session-1', 'user-1')[0]?.status).toBe('completed')
+    store.append(row(4, 'tool-2'))
+    expect(store.values('session-1', 'user-1')).toMatchObject([
+      { activityId: 'tool-1', revisionSeq: 3, status: 'completed' },
+      { activityId: 'tool-2', revisionSeq: 4, status: 'running' },
+    ])
   })
 
   it('rejects a filtered/non-contiguous page so the caller must repair from its cursor', () => {

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  captureLiveDiagnostic,
   collectLiveDiagnostic,
   emitLiveDiagnostic,
   installLiveDiagnosticTrace,
@@ -59,7 +58,7 @@ describe('opt-in live diagnostics observer', () => {
       contextUsed: 1,
       contextSize: 2,
     })
-    expect(() => captureLiveDiagnostic(() => factory() as never)).not.toThrow()
+    expect(() => emitLiveDiagnostic(factory())).not.toThrow()
     expect(liveDiagnosticTraceFailureCount()).toBe(1)
     const asyncSink = vi.fn(() => Promise.reject(new Error('private async failure')))
     install(asyncSink)

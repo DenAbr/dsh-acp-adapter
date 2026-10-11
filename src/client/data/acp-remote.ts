@@ -1,6 +1,5 @@
 /**
- * dshAcp Remote 的 client 侧窄化面：取代 的手写 fetch 管线
- * （`ACP_HEALTH_PATH` / `acpSessionOptionsPath`）。
+ * dshAcp Remote 的 client 侧窄化面，直接消费生成的 namespace。
  *
  * clientEntry（../index.ts）把生成物 contribution（lib/typert.remote-client.js）
  * `$mount` 到 `ctx.get('remote')` 后，namespace 以 cordis 服务键

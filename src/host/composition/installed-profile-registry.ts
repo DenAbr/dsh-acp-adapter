@@ -522,9 +522,6 @@ export function installInstalledProfileRegistry(
       // seam as the ACP probe.  Omitting this made a successful probe coexist
       // with executable=false/version=null in the Settings panel.
       subprocess,
-      // The provider composition has no Agent owner; activity methods are
-      // intentionally read-only and describe provider-owned facts only.
-      resolveLiveAgent: () => undefined,
       teamManagement: createTeamManagement(
         ctx,
         (provider) => [...profileAdapters.keys()].some((id) => acpRouteId(id) === provider),

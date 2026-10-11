@@ -4,7 +4,7 @@
 
 在 DSH 中使用 ACP Agent，沿用原生会话、工具审批和团队协作。
 
-> **开发分支 `0.2.1-alpha`：** 正在适配 DSH `0.2.1-alpha.2`，尚未发布；下一个稳定桌面版本验收前不合并 main。兼容改动、可采用能力与 UI/UX 评估见[开发记录](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/0.2.1-alpha/docs/dsh-0.2.1-alpha.md)。以下安装说明仍对应已发布版本。
+> **开发分支 `0.2.1-alpha`：** 正在适配 DSH `0.2.1-alpha.2`，尚未发布；下一个稳定桌面版本验收前不合并 main。以下安装说明仍对应已发布版本。
 
 ## 安装
 
@@ -61,7 +61,7 @@ Git 与压缩包安装示例：
 
 > CodeBuddy CLI 与 WorkBuddy 桌面端使用同一账号积分，无需分别订阅；通过 CodeBuddy CLI 接入 DSH。详见 [CodeBuddy 账号与订阅说明](https://www.codebuddy.cn/docs/ide/Account/pricing)及 [ACP 命令参考](https://www.codebuddy.cn/docs/cli/cli-reference)。
 
-各 Agent 的具体真实运行范围见 [E2E 验证记录](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/main/test/e2e/README.md)。
+已发布版本的真实 Agent 检查范围与结果见 [rc.2.9 E2E 验证记录](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/v0.2.0-rc.2.9/test/e2e/README.md)。
 
 ## 功能预览
 
@@ -91,4 +91,4 @@ Git 与压缩包安装示例：
 
 在 **ACP 诊断**中可导出安全摘要 JSON；其中不含消息正文、命令、路径、原始会话 ID 或 ACP 凭据。DSH 原生会话日志 ZIP 可能含提示词、工具参数、文件路径和附件；分享前请检查并移除敏感信息。
 
-需要求助时，向 [Issue](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/issues) 附上错误编号、DSH/插件版本和已脱敏的日志片段。技术边界见[原生复用说明](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/main/docs/native-reuse.md)。
+需要求助时，向 [Issue](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/issues) 附上错误编号、DSH/插件版本和已脱敏的日志片段。已发布版本的技术边界见[rc.2.9 原生复用说明](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/blob/v0.2.0-rc.2.9/docs/native-reuse.md)。

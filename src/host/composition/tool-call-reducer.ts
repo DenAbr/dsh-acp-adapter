@@ -21,7 +21,6 @@ export interface AcpToolCallCancellationContext {
 }
 
 export interface AcpToolCallSnapshot extends AcpToolCallPatch {
-  readonly provenanceId: string
   readonly status: AcpToolCallStatus
   /** Original provider status when an external Stop caused a running call to fail. */
   readonly providerStatus?: 'failed'
@@ -34,16 +33,9 @@ function normalizedStatus(value: AcpToolCallPatchStatus | null | undefined): Acp
   return value === 'in_progress' ? 'running' : value
 }
 
-/** Stable ACP provenance for one call id within one DSH turn. */
-export function acpToolProvenanceId(turnId: string, callId: string): string {
-  return `acp:${turnId}:${callId}`
-}
-
 /** A bounded-in-scope reducer: one instance belongs to one DSH turn. */
 export class AcpToolCallReducer {
   private readonly calls = new Map<string, AcpToolCallSnapshot>()
-
-  constructor(private readonly turnId: string) {}
 
   apply(patch: AcpToolCallPatch, context: AcpToolCallCancellationContext = {}): AcpToolCallSnapshot {
     const previous = this.calls.get(patch.callId)
@@ -61,7 +53,6 @@ export class AcpToolCallReducer {
     const next: AcpToolCallSnapshot = {
       ...(previous ?? {
         callId: patch.callId,
-        provenanceId: acpToolProvenanceId(this.turnId, patch.callId),
         status: 'pending',
       }),
       // ACP says omitting a field leaves it unchanged.  `name: null` has the

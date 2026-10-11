@@ -651,7 +651,7 @@ export interface AcpProfileRuntime {
   /** Negotiated image input; absent when the owning connection is unavailable. */
   readonly inputImageSupported?: boolean | undefined
   readonly protocolVersion?: number | undefined
-  /** Latest ACP session-scoped configuration; presence means this runtime supports M6 config convergence. */
+  /** Latest ACP session-scoped configuration used for configuration convergence. */
   readonly configOptions?: readonly acp.SessionConfigOption[] | undefined
   readonly currentModeId?: string | undefined
   readonly modes?: acp.SessionModeState | undefined
@@ -2062,8 +2062,7 @@ export class AcpProfileAdapter extends LlmAdapter {
       const runtimeKey = `${sessionKey}:${generation.id}`
       const priorGeneration = [...self.runtimes.keys()].find((key) => key.startsWith(`${sessionKey}:`))
       if (priorGeneration !== undefined && priorGeneration !== runtimeKey) {
-        // M2 has no binding/recovery transaction yet.  Never silently start a
-        // new ACP session after a profile identity edit: doing so would lose
+        // Never silently start a new ACP session after a profile identity edit: doing so would lose
         // the remote context while DSH still shows the old conversation.
         if (self.sidecar !== undefined) {
           await self.blockRecovery(sessionKey, {
@@ -2713,7 +2712,7 @@ export class AcpProfileAdapter extends LlmAdapter {
         // Tool ids are session-scoped, while sparse patch state belongs to this
         // one prompt projection.  Never carry a partially observed call into a
         // later DSH turn, even if an Agent reuses its id.
-        const toolCallReducer = new AcpToolCallReducer(dispatchKey)
+        const toolCallReducer = new AcpToolCallReducer()
         const activityPositions = new Map<string, number>()
         let currentAnchor = admissionProof?.anchorMessageId ?? `prompt:${dispatchKey}`
         let activityIndexOffset = 0

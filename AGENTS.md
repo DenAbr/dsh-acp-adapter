@@ -2,7 +2,7 @@
 
 This repository adapts external ACP Agents to DSH. DSH owns native input admission, tools and presentation; each Agent owns its model loop and native tools. Read [native reuse](docs/native-reuse.md) before changing that division. The compatibility target is the exact published DSH version in `package.json`; `reference/deepseek-harness` is a source scaffold, not a replacement dependency.
 
-Prefer official features and logic when they preserve existing capabilities without adding user configuration, operations or migration work. For affected business domains, trace both the adapter and the pinned upstream's real producer/consumer paths before refactoring; identify maintenance removed, behavior retained, and native UI conflicts. Use the [source alignment review](docs/dsh-0.2.1-optimization.md) for the current domain map and decisions. Keep necessary ACP permissions, continuity and persistence adaptations when upstream semantics differ.
+Prefer official features and logic when they preserve existing capabilities without adding user configuration, operations or migration work. For affected business domains, trace both the adapter and the pinned upstream's real producer/consumer paths before refactoring; identify maintenance removed, behavior retained, and native UI conflicts. Keep necessary ACP permissions, continuity and persistence adaptations when upstream semantics differ.
 
 Use these workflows when their scope applies:
 

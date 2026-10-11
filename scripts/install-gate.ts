@@ -28,11 +28,6 @@ export interface InstallGateArgs {
   help: boolean
 }
 
-export interface AuthenticatedBootstrapResult {
-  status: number
-  body: string
-}
-
 export interface WaitForAuthenticatedBootstrapOptions {
   readOutput: () => string
   fetchImpl?: typeof fetch

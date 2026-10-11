@@ -104,7 +104,6 @@ describe('AcpProfileAdapter generation and dispatch boundaries', () => {
     )
     const service = new AcpRemoteService(new Context(), {
       registry: { agents: () => new Map([['shared', current]]), probeCacheFor: () => adapter },
-      resolveLiveAgent: () => undefined,
       checkExecutable: async () => true,
       queryVersion: async () => null,
     })

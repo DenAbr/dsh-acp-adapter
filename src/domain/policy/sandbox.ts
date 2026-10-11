@@ -16,11 +16,6 @@ export type AcpSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-acce
 export interface AcpSpawnPlan {
   readonly argv: string[]
   readonly env: Record<string, string>
-  readonly mode: 'danger-full-access'
-  readonly confined: null
-  readonly confinedRoot: null
-  readonly stateDir: null
-  readonly platformId: string
 }
 
 export { AcpSpawnPlanError } from './errors.ts'
@@ -37,7 +32,6 @@ export const ACP_NATIVE_XDG_ENV_KEYS: readonly string[] = [
 
 export interface AcpSpawnPlanOptions {
   readonly mode: AcpSandboxMode
-  readonly workspaceRoot?: string
   readonly argv: readonly string[]
   readonly env: Record<string, string>
 }
@@ -56,10 +50,5 @@ export function buildAcpSpawnPlan(options: AcpSpawnPlanOptions): AcpSpawnPlan {
   return {
     argv: [...options.argv],
     env: { ...options.env },
-    mode: options.mode,
-    confined: null,
-    confinedRoot: null,
-    stateDir: null,
-    platformId: process.platform,
   }
 }

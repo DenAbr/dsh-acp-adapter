@@ -22,7 +22,6 @@ function setup() {
   })
   const service = new AcpRemoteService(new Context(), {
     registry: { agents: () => new Map(), probeCacheFor: () => undefined },
-    resolveLiveAgent: () => undefined,
     agentSessionChanges: { canRead: (id) => allowed && id === 'session', subscribe: () => () => {} },
     toolApprovalPolicy: { read, write },
     toolApprovalPolicyChanges: {

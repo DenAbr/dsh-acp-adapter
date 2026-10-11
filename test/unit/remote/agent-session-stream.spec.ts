@@ -36,7 +36,6 @@ function setup() {
   const readRecovery = vi.fn(async () => recovery)
   const service = new AcpRemoteService(new Context(), {
     registry: { agents: () => new Map(), probeCacheFor: () => undefined },
-    resolveLiveAgent: () => undefined,
     backendFacts: {
       readBindingProvider: async () => (bound ? 'acp-kimi' : undefined),
       peekHeaderProvider: async () => undefined,
