@@ -14,6 +14,7 @@ import { createAcpLogger } from '../../domain/observability/logging.ts'
 import { acpProbeConfigKey } from './llm-stub.ts'
 import { installNativeAgentAccess } from './native-agent-access.ts'
 import { AcpProfileAdapter } from './profile-adapter.ts'
+import { installWorkingDirectoryGuard } from './working-directory-guard.ts'
 import { profileLaunchIdentityHash } from '../../domain/session/launch-fingerprint.ts'
 import type { SubprocessSeamResolution } from '../../runtime/process/subprocess.ts'
 import { installAcpSidecar } from '../../persistence/sidecar.ts'
@@ -336,6 +337,7 @@ export function installInstalledProfileRegistry(
   // Adapters are also the owner of provider-composition recovery verbs. Keep
   // this map available before constructing the additive Remote service.
   const profileAdapters = new Map<string, AcpProfileAdapter>()
+  installWorkingDirectoryGuard(ctx, (profileId) => profileAdapters.get(profileId))
   const controlSubscribers = new Map<string, Set<() => void>>()
   const policySubscribers = new Set<() => void>()
   const notifyPolicySubscribers = (): void => {
@@ -591,7 +593,14 @@ export function installInstalledProfileRegistry(
             .find((candidate) => candidate !== undefined)
           // An in-memory gate exists only when durable recovery persistence
           // failed, so it must outrank any older healthy sidecar record.
-          const visibleState = fallback ?? (await sidecar.readRecoveryState(sessionId as never))
+          let visibleState = fallback ?? (await sidecar.readRecoveryState(sessionId as never))
+          if (fallback === undefined && visibleState?.kind === 'reconnect-required') {
+            const profileId =
+              visibleState.provider === undefined ? undefined : acpAgentIdFromRoute(visibleState.provider)
+            const adapter = profileId === undefined ? undefined : profileAdapters.get(profileId)
+            if (await adapter?.isAutomaticDirectoryHandoff(sessionId, visibleState))
+              visibleState = { ...visibleState, kind: 'healthy' }
+          }
           // A real recovery outcome (especially outcome-unknown) always wins.
           // Settlement status is volatile display context and is never written
           // to the recovery sidecar.

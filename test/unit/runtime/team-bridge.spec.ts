@@ -33,6 +33,10 @@ class BridgeFakePtcRuntime extends PtcRuntime {
   }
 }
 
+function withInitiator<T>(_agent: unknown, operation: () => T): T {
+  return operation()
+}
+
 function createFeedbackSession(source: unknown = { kind: 'user' }): Session {
   const session = Session.create(SessionId('lead'))
   session.append('turn/start', { turn: 1 })
@@ -231,7 +235,10 @@ async function setup(
             ? membership.current
             : undefined,
     },
-    agents: { get: (id: string) => (id === 'lead' ? agent : id === 'team-root' ? rootAgent : undefined) },
+    agents: {
+      get: (id: string) => (id === 'lead' ? agent : id === 'team-root' ? rootAgent : undefined),
+      withInitiator,
+    },
     tools: {
       schemas: (scope: unknown) =>
         scope === agent ? [...definitions.values()].filter((definition) => !hidden.has(definition.name)) : [],
@@ -305,6 +312,7 @@ async function setup(
       currentAgent = replacement
       services.agents = {
         get: (id: string) => (id === 'lead' ? currentAgent : id === 'team-root' ? rootAgent : undefined),
+        withInitiator,
       }
     },
   }
@@ -377,7 +385,7 @@ describe('session-owned native Teams MCP bridge', () => {
     const bridgeCtx = {
       on: (name: string, listener: (...args: unknown[]) => void) => dsh.on(name as never, listener as never),
       get: (name: string) => {
-        if (name === 'agents') return { get: (id: string) => (id === agent.id ? agent : undefined) }
+        if (name === 'agents') return { get: (id: string) => (id === agent.id ? agent : undefined), withInitiator }
         if (name === 'agentTeams' || name === 'attachments') return undefined
         return dsh.get(name as never)
       },
@@ -512,7 +520,7 @@ describe('session-owned native Teams MCP bridge', () => {
     const bridgeCtx = {
       on: (name: string, listener: (...args: unknown[]) => void) => dsh.on(name as never, listener as never),
       get: (name: string) => {
-        if (name === 'agents') return { get: (id: string) => (id === agent.id ? agent : undefined) }
+        if (name === 'agents') return { get: (id: string) => (id === agent.id ? agent : undefined), withInitiator }
         if (name === 'agentTeams' || name === 'attachments') return undefined
         return dsh.get(name as never)
       },
@@ -1408,7 +1416,7 @@ describe('session-owned native Teams MCP bridge', () => {
       const bridgeCtx = {
         on: (name: string, listener: (...args: unknown[]) => void) => dsh.on(name as never, listener as never),
         get: (name: string) => {
-          if (name === 'agents') return { get: (id: string) => (id === agent.id ? agent : undefined) }
+          if (name === 'agents') return { get: (id: string) => (id === agent.id ? agent : undefined), withInitiator }
           if (name === 'agentTeams' || name === 'attachments') return undefined
           return dsh.get(name as never)
         },

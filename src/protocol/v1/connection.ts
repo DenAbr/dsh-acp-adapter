@@ -412,6 +412,16 @@ export class AcpClientConnection {
     return this.process.isClosed
   }
 
+  /** Current transport facts, including idle process exit and provider failure. */
+  get isTransportAvailable(): boolean {
+    return (
+      !this.process.isClosed &&
+      this.process.exited === null &&
+      this.process.failure === undefined &&
+      this.poisonedByOp === undefined
+    )
+  }
+
   /** poison 事实：触发放弃的 RPC 操作名；未 poison 为 undefined。 */
   get poisonedBy(): string | undefined {
     return this.poisonedByOp

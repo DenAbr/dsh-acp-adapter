@@ -87,6 +87,10 @@ export function acpSessionView(ctx: Context, session: Session | undefined): Sess
       ctx.on('session/event', (owner, event) => {
         if (owner.id === session.id && event.type === 'turn/end') listener()
       }),
+    watchWorkingDirectory: (listener) =>
+      ctx.on('session/event', (owner, event) => {
+        if (owner === session && event.type === 'working-directory/change') listener(event.data.cwd)
+      }),
     watchRouteChange: (provider, listener) =>
       ctx.on('agent/request', async ({ agent }, next) => {
         const config = await next()

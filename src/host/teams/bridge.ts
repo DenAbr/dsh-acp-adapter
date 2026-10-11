@@ -1092,13 +1092,15 @@ export async function createTeamBridge(
           }
           let result: Awaited<ReturnType<typeof tools.execute>>
           try {
-            result = await tools.execute({
-              callId: hostCallId as never,
-              name: definition.name,
-              arguments: args,
-              agent,
-              signal: bodySignal,
-            })
+            result = await agents.withInitiator(agent, () =>
+              tools.execute({
+                callId: hostCallId as never,
+                name: definition.name,
+                arguments: args,
+                agent,
+                signal: bodySignal,
+              }),
+            )
             if (toolErrorInfoCode(result.error) === TOOL_ABORTED_BEFORE_DISPATCH)
               callRecord.abortedBeforeDispatch = true
             if (diagnosticEnabled && diagnosticBase !== undefined) {

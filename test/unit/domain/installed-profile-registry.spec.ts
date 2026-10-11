@@ -240,8 +240,8 @@ function fakeHarness(options: { failOnRoute?: string } = {}): FakeHarness {
       return () => listeners.delete(name)
     },
     get: (name: string): unknown => (name === 'settings' ? settings : undefined),
-    inject: (_deps: string[], callback: (sctx: unknown) => void): void => {
-      callback(scopedCtx)
+    inject: (deps: string[], callback: (sctx: unknown) => void): void => {
+      if (deps.every((name) => scopedCtx.get(name) !== undefined)) callback(scopedCtx)
     },
     effect: (_setup: () => () => void, _name?: string): void => {},
     llm,

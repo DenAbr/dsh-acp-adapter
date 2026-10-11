@@ -643,6 +643,45 @@ describe('createAcpSidecar 基本读写（v2 envelope 契约）', () => {
 })
 
 describe(' binding 语义门槛（readLatestBinding 三态）', () => {
+  it('目录 fork 仅凭精确父绑定与持久 intent 保留历史，普通 append 仍拒绝', async () => {
+    const id = SessionId('sess-directory-fork')
+    const next = bindingData({
+      agentSessionId: 'forked-session',
+      canonicalCwd: '/tmp/checkout',
+      generation: 2,
+      bindingEpoch: 2,
+      establishedAt: TIME_BASE + 1,
+    })
+    await store.append(id, { kind: 'binding', data: BINDING_A })
+    await expect(store.append(id, { kind: 'binding', data: next })).rejects.toThrow('continuity anchors')
+    await expect(store.commitDirectoryFork(id, BINDING_A, next)).rejects.toThrow('durable intent')
+    await store.writeRecoveryState({
+      dshSessionId: id,
+      kind: 'outcome-unknown',
+      cause: 'fork-intent',
+      provider: BINDING_A.provider,
+      acpSessionId: BINDING_A.agentSessionId,
+      generation: BINDING_A.generation,
+      updatedAt: TIME_BASE,
+    })
+    await expect(store.commitDirectoryFork(id, { ...BINDING_A, dshCommittedSeq: 9 }, next)).rejects.toThrow(
+      'parent changed',
+    )
+    for (const invalid of [
+      { ...next, historyBaseSeq: 8 },
+      { ...next, committedPromptOrdinal: 1 },
+      { ...next, bindingEpoch: 1 },
+      { ...next, canonicalCwd: BINDING_A.canonicalCwd },
+      { ...next, launchFingerprint: { ...next.launchFingerprint, args: ['changed'] } },
+    ])
+      await expect(store.commitDirectoryFork(id, BINDING_A, invalid)).rejects.toThrow('parent continuity')
+    expect(await store.list(id)).toHaveLength(1)
+    await store.commitDirectoryFork(id, BINDING_A, next)
+    expect(await latestBinding(id)).toMatchObject(next)
+    expect(await store.list(id)).toHaveLength(2)
+    await expect(store.commitDirectoryFork(id, BINDING_A, next)).rejects.toThrow('parent changed')
+  })
+
   it('已有合法 binding 时拒绝畸形覆盖，索引与 audit 同事务保持不变', async () => {
     await store.append(SessionId('sess-1'), { kind: 'binding', time: 10, data: BINDING_A })
     await expect(

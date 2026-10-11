@@ -391,6 +391,18 @@ export class AcpSessionRuntime {
   get agentCapabilities(): acp.AgentCapabilities | undefined {
     return this.connection?.agentCapabilities
   }
+  /** Positive image-input proof belongs to the current live connection only. */
+  get inputImageSupported(): boolean | undefined {
+    if (
+      this.connection === undefined ||
+      !this.connection.isTransportAvailable ||
+      this.connectionAbort?.signal.aborted === true ||
+      this.mcpLease?.signal.aborted === true ||
+      this.mcpKey !== this.options.mcpKey?.()
+    )
+      return undefined
+    return this.connection.agentCapabilities?.promptCapabilities?.image
+  }
   get agentInfo(): acp.Implementation | null | undefined {
     return this.connection?.agentInfo
   }
@@ -703,6 +715,7 @@ export class AcpSessionRuntime {
     onTeamReport?: () => void,
     onTurnConcluded?: () => void,
     onSuccessfulToolResult?: () => void,
+    hostBodySignal: AbortSignal | undefined = signal,
   ): Promise<acp.PromptResponse> {
     if (this.promptClaimed) throw new Error('ACP_PROMPT_ALREADY_ACTIVE')
     // Claim synchronously before the asynchronous local feedback flush. Without
@@ -759,7 +772,7 @@ export class AcpSessionRuntime {
         // Natural prompt completion aborts setup/permission work but must not
         // cancel an already-dispatched Host body. When ACP has no external
         // Stop signal, provide a distinct live signal until lease shutdown.
-        signal ?? new AbortController().signal,
+        hostBodySignal ?? new AbortController().signal,
         onSuccessfulToolResult,
       )
       // Do not pass the turn signal into the RPC budget layer: abandoning an

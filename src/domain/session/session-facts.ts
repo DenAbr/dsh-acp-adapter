@@ -85,6 +85,8 @@ export function applySessionFact(previous: SessionFacts, event: SessionEventLike
 
 /** Live read face backed by native Session and projection services, not a log copy. */
 export interface SessionLike {
+  /** Observe committed directory changes without treating them as user steering. */
+  watchWorkingDirectory?(listener: (cwd: string) => void): () => void
   /** Observe pending next-step user input without claiming or copying the inbox. */
   watchSteering?(listener: () => void): () => void
   /** Release a suspended execution if native admission ends its owning turn. */

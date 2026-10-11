@@ -7,12 +7,14 @@ import { hostToolsTurn } from './host-tools-turn.ts'
 import { settlementTurn } from './settlement-turn.ts'
 import { scheduleTurn } from './schedule-turn.ts'
 import { longConversationTurn } from './long-conversation-turn.ts'
+import { optionalToolsTurn } from './optional-tools-turn.ts'
 
 export async function regressionTurn(
   session: MockSession,
   msg: PromptMessage,
   { sendUpdate, sendAgentRequest, respond, log }: MockPeer,
 ) {
+  if (await optionalToolsTurn(session, msg, { sendUpdate, sendAgentRequest, respond, log })) return
   if (await teamTurn(session, msg, { sendUpdate, sendAgentRequest, respond, log })) return
   if (await scheduleTurn(session, msg, { sendUpdate, sendAgentRequest, respond, log })) return
   if (await longConversationTurn(session, msg, { sendUpdate, sendAgentRequest, respond, log })) return

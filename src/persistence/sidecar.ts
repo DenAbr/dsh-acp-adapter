@@ -396,6 +396,8 @@ export interface AcpRecoveryState {
   readonly acpSessionId?: string
   readonly generation?: number
   readonly interruptedTurnId?: string
+  /** Known, settled cwd handoff deferred by User Stop; never an uncertain fork. */
+  readonly targetCwd?: string
   /** Last time the host attempted a non-healthy recovery transition. */
   readonly lastAttemptAt?: number
   /** Explicit user action, when the recovery surface records one. */
@@ -578,6 +580,8 @@ export interface AcpSidecar {
    * @param entry - 待落盘记录；`time` 缺省时由 store 时钟补齐。
    */
   append(sessionId: SessionId, entry: AcpSidecarEntryInput): Promise<void>
+  /** Commit a confirmed cwd fork against its exact durable parent and fork intent. */
+  commitDirectoryFork(sessionId: SessionId, parent: AcpBindingData, replacement: AcpBindingData): Promise<void>
   /** Persist the dispatch uncertainty before crossing the ACP process boundary. */
   beginDispatch(record: AcpDispatchRecord): Promise<void>
   /** Mark a previously durable dispatch complete; idempotent for settled rows. */
@@ -729,7 +733,7 @@ function toRecoveryState(raw: unknown): AcpRecoveryState | undefined {
   ]
   if (typeof raw.kind !== 'string' || !kinds.includes(raw.kind)) return undefined
   if (typeof raw.updatedAt !== 'number' || !Number.isFinite(raw.updatedAt)) return undefined
-  for (const key of ['cause', 'detail', 'provider', 'acpSessionId', 'interruptedTurnId'] as const) {
+  for (const key of ['cause', 'detail', 'provider', 'acpSessionId', 'interruptedTurnId', 'targetCwd'] as const) {
     if (key in raw && raw[key] !== undefined && typeof raw[key] !== 'string') return undefined
   }
   if (
@@ -1389,7 +1393,7 @@ class SidecarStore implements AcpSidecar {
    * 同步落库：序号、内容 ID 与 decided 去重都在数据库写锁内分配；binding
    * 同时 upsert 最新索引表。
    */
-  private insertSync(sessionId: string, entry: StampedEntry): void {
+  private insertSync(sessionId: string, entry: StampedEntry, directoryForkParent?: AcpBindingData): void {
     const db = this.ensureDb()
     const ids = deriveAcpIds(entry.kind, entry.data)
     const dedupeKey = decidedDedupeKeyOf(entry.kind, entry.data)
@@ -1402,7 +1406,10 @@ class SidecarStore implements AcpSidecar {
         transactionOpen = false
         return
       }
-      if (entry.kind === 'binding') this.assertBindingTransition(sessionId, entry)
+      if (entry.kind === 'binding') {
+        if (directoryForkParent === undefined) this.assertBindingTransition(sessionId, entry)
+        else this.assertDirectoryForkTransition(sessionId, entry, directoryForkParent)
+      }
       const identity = this.nextAuditIdentity(sessionId, entry)
       const seq = identity.seq
       const recordId = dedupeKey ?? identity.recordId
@@ -1474,7 +1481,8 @@ class SidecarStore implements AcpSidecar {
   /**
    * binding 状态迁移门。数据库是最后一道恢复防线，不能只相信调用方的
    * TypeScript 类型：同代只允许推进日志锚点；新代只允许同 provider 的
-   * rebindBlank，并且 generation 必须恰好 +1。校验与 upsert 位于同一个
+   * rebindBlank，并且 generation 必须恰好 +1。保留上下文的目录 fork 走专用 CAS。
+   * 校验与 upsert 位于同一个
    * `BEGIN IMMEDIATE` 事务内，因此并发进程也不能 last-writer-wins。
    */
   private assertBindingTransition(sessionId: string, entry: Extract<StampedEntry, { kind: 'binding' }>): void {
@@ -1531,6 +1539,52 @@ class SidecarStore implements AcpSidecar {
         `dsh-acp sidecar: refusing a new binding generation with regressed continuity anchors for session ${JSON.stringify(sessionId)}`,
       )
     }
+  }
+
+  private assertDirectoryForkTransition(
+    sessionId: string,
+    entry: Extract<StampedEntry, { kind: 'binding' }>,
+    parent: AcpBindingData,
+  ): void {
+    const row = this.stmtGetBinding?.get(sessionId) as BindingRow | undefined
+    const current = row === undefined ? undefined : this.parseBindingRow(row)
+    const next = toBindingRecord(entry.time, entry.data)
+    const expected = toBindingRecord(0, parent)
+    if (current === undefined || next === undefined || expected === undefined)
+      throw new Error('dsh-acp sidecar: directory fork requires valid bindings')
+    // The read timestamp is not binding identity; every persisted binding fact is.
+    const { time: _currentTime, ...currentData } = current
+    const { time: _expectedTime, ...expectedData } = expected
+    if (stableStringify(currentData) !== stableStringify(expectedData))
+      throw new Error('dsh-acp sidecar: directory fork parent changed')
+    const recoveryRow = this.stmtGetRecoveryState?.get(sessionId) as { payload: string } | undefined
+    const recovery = recoveryRow === undefined ? undefined : toRecoveryState(JSON.parse(recoveryRow.payload))
+    if (
+      recovery?.dshSessionId !== sessionId ||
+      recovery.kind !== 'outcome-unknown' ||
+      recovery.cause !== 'fork-intent' ||
+      recovery.provider !== current.provider ||
+      recovery.acpSessionId !== current.agentSessionId ||
+      recovery.generation !== current.generation
+    )
+      throw new Error('dsh-acp sidecar: directory fork has no matching durable intent')
+    const { time: _nextTime, ...nextData } = next
+    const allowed: AcpBindingData = {
+      ...currentData,
+      agentSessionId: next.agentSessionId,
+      canonicalCwd: next.canonicalCwd,
+      generation: current.generation + 1,
+      bindingEpoch: current.bindingEpoch + 1,
+      establishedAt: next.establishedAt,
+      capabilityHash: next.capabilityHash,
+    }
+    if (
+      next.agentSessionId === current.agentSessionId ||
+      next.canonicalCwd === current.canonicalCwd ||
+      next.establishedAt < current.establishedAt ||
+      stableStringify(nextData) !== stableStringify(allowed)
+    )
+      throw new Error('dsh-acp sidecar: directory fork must preserve parent continuity')
   }
 
   /** 入队（非审批审计）：满 → 丢弃 + warn 计数（绝不阻塞 turn）。 */
@@ -1659,6 +1713,12 @@ class SidecarStore implements AcpSidecar {
     } catch (error: unknown) {
       return Promise.reject(error instanceof Error ? error : new Error(errorMessage(error)))
     }
+  }
+
+  async commitDirectoryFork(sessionId: SessionId, parent: AcpBindingData, replacement: AcpBindingData): Promise<void> {
+    assertSafeSessionId(sessionId)
+    this.drainQueue()
+    this.insertSync(sessionId, { kind: 'binding', time: this.now(), data: replacement }, parent)
   }
 
   async beginDispatch(record: AcpDispatchRecord): Promise<void> {
