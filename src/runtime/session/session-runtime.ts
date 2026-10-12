@@ -73,6 +73,10 @@ export interface AcpSessionRuntimeOptions {
   readonly qwenTaskJobs?: QwenTaskJobStarter
   /** How long an adopting host call waits for Qwen to announce its turn. */
   readonly agentTurnWaitMs?: number
+  /** Unannounced (cron) turn: quiet period after a tool-free model round that ends it. */
+  readonly unannouncedRoundGraceMs?: number
+  /** Unannounced (cron) turn: inactivity bound when no round marker arrives. */
+  readonly unannouncedIdleMs?: number
 }
 
 /** Options for one `prompt()` call. */
@@ -88,11 +92,44 @@ export interface AcpPromptOptions {
 /** One Agent-initiated (Qwen `_qwencode/start_turn`) turn. */
 interface AgentTurn {
   readonly turnId: string
+  /** false = inferred from out-of-turn updates (Qwen cron/loop turns carry no start/end markers). */
+  readonly announced: boolean
   readonly buffer: AcpSessionNotification[]
   listener: ((notification: AcpSessionNotification) => void) | undefined
   ended: string | undefined
   readonly endedPromise: Promise<string>
   readonly end: (reason: string) => void
+  /** Unannounced turns: tool calls not yet terminal, and the end-detection timers. */
+  readonly openTools: Set<string>
+  roundTimer?: ReturnType<typeof setTimeout> | undefined
+  idleTimer?: ReturnType<typeof setTimeout> | undefined
+}
+
+/** Updates that describe Agent work (as opposed to session metadata). */
+function isTurnContent(update: AcpSessionNotification['update']): boolean {
+  const kind = update.sessionUpdate
+  if (kind === 'user_message_chunk') {
+    const source = (update as { _meta?: { source?: unknown } })._meta?.source
+    return source === 'cron' || source === 'loop'
+  }
+  if (kind === 'agent_message_chunk' && isUsageChunk(update)) return false
+  return kind === 'agent_message_chunk' || kind === 'agent_thought_chunk' || kind === 'tool_call' || kind === 'tool_call_update' || kind === 'plan'
+}
+
+/** Qwen closes every model round with an empty chunk carrying `_meta.usage`. */
+function isUsageChunk(update: AcpSessionNotification['update']): boolean {
+  if (update.sessionUpdate !== 'agent_message_chunk') return false
+  const meta = (update as { _meta?: { usage?: unknown } })._meta
+  return typeof meta?.usage === 'object' && meta.usage !== null
+    && (update.content.type !== 'text' || update.content.text === '')
+}
+
+function scheduledTurnLabel(update: AcpSessionNotification['update']): string | undefined {
+  if (update.sessionUpdate !== 'user_message_chunk' || update.content.type !== 'text') return undefined
+  const source = (update as { _meta?: { source?: unknown } })._meta?.source
+  const text = update.content.text.replace(/\s+/g, ' ').trim()
+  const short = text.length > 100 ? `${text.slice(0, 99)}…` : text
+  return `${source === 'loop' ? 'loop' : 'cron'}: ${short === '' ? 'scheduled prompt' : short}`
 }
 
 const AGENT_TURN_BUFFER_MAX = 10_000
@@ -441,6 +478,9 @@ export class AcpSessionRuntime {
         // Qwen's discrete "background task completed" line is task state, not
         // part of the assistant answer; it would otherwise run into the reply.
         if (qwenTaskCompletion(notification) !== undefined) return
+        // Qwen drains its cron queue before answering session/prompt: from the
+        // echoed scheduled prompt on, the stream belongs to that automatic turn.
+        if (notification.sessionId === sessionId && this.liveAgentTurn()?.announced === false) return
         const update = notification.update
         // Permission snapshots retain the original wire identity; only the presentation callback is normalized.
         const presented = notification.sessionId === sessionId && (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')
@@ -760,16 +800,7 @@ export class AcpSessionRuntime {
     if (this.liveAgentTurn() !== undefined) return { accepted: false }
     const tasks = this.ensureQwenTasks()
     if (tasks === undefined) return notFound()
-    let resolveEnded!: (reason: string) => void
-    const endedPromise = new Promise<string>(resolve => { resolveEnded = resolve })
-    const turn: AgentTurn = {
-      turnId: params.turnId, buffer: [], listener: undefined, ended: undefined, endedPromise,
-      end: (reason) => {
-        if (turn.ended !== undefined) return
-        turn.ended = reason
-        resolveEnded(reason)
-      },
-    }
+    const turn = this.createAgentTurn(params.turnId, true)
     // A host call already waiting adopts it directly; otherwise the task's
     // native job settles unawaited and DSH wakes the idle agent.
     if (!this.awaitingAgentTurn && !tasks.wake(params)) return notFound()
@@ -780,12 +811,34 @@ export class AcpSessionRuntime {
     return { accepted: true }
   }
 
+  private createAgentTurn(turnId: string, announced: boolean): AgentTurn {
+    let resolveEnded!: (reason: string) => void
+    const endedPromise = new Promise<string>(resolve => { resolveEnded = resolve })
+    const turn: AgentTurn = {
+      turnId, announced, buffer: [], listener: undefined, ended: undefined, endedPromise, openTools: new Set(),
+      end: (reason) => {
+        if (turn.ended !== undefined) return
+        turn.ended = reason
+        if (turn.roundTimer !== undefined) clearTimeout(turn.roundTimer)
+        if (turn.idleTimer !== undefined) clearTimeout(turn.idleTimer)
+        resolveEnded(reason)
+      },
+    }
+    return turn
+  }
+
   private endAgentTurn(params: QwenTurnEndParams): void {
     if (params.sessionId !== this.sessionId) return
     const turn = this.agentTurns.find(candidate => candidate.turnId === params.turnId)
     if (turn === undefined) return
-    turn.end(params.reason ?? 'end_turn')
-    if (this.liveAgentTurn() === undefined) this.connection?.setAgentTurnActive(params.sessionId, false)
+    this.finishAgentTurn(turn, params.reason ?? 'end_turn')
+  }
+
+  private finishAgentTurn(turn: AgentTurn, reason: string): void {
+    if (turn.ended !== undefined) return
+    turn.end(reason)
+    const sessionId = this.sessionId
+    if (sessionId !== undefined && this.liveAgentTurn() === undefined) this.connection?.setAgentTurnActive(sessionId, false)
     if (turn.listener === undefined) {
       // Not adopted yet: keep a bounded record for the woken host turn only.
       const stale = setTimeout(() => {
@@ -803,11 +856,61 @@ export class AcpSessionRuntime {
       this.ensureQwenTasks()?.complete(completion, this.wirePromptActive)
       return
     }
-    if (this.wirePromptActive) return
-    const turn = this.liveAgentTurn()
-    if (turn === undefined) return
+    let turn = this.liveAgentTurn()
+    if (this.wirePromptActive && turn?.announced !== false && scheduledTurnLabel(notification.update) === undefined) return
+    if (turn === undefined) {
+      // Qwen runs cron/loop turns (and announced turns it fell back on) with
+      // no start/end markers. Adopt them like a background turn instead of
+      // dropping their output and failing their approvals. A scheduled echo
+      // may arrive while the finishing prompt is still on the wire.
+      if (this.promptClaimed && !this.awaitingAgentTurn && scheduledTurnLabel(notification.update) === undefined) return
+      if (!isTurnContent(notification.update)) return
+      turn = this.startUnannouncedTurn(notification)
+      if (turn === undefined) return
+    }
+    if (!turn.announced) this.trackUnannouncedTurn(turn, notification.update)
     if (turn.listener !== undefined) turn.listener(notification)
     else if (turn.buffer.length < AGENT_TURN_BUFFER_MAX) turn.buffer.push(notification)
+  }
+
+  private unannouncedSeq = 0
+
+  private startUnannouncedTurn(notification: AcpSessionNotification): AgentTurn | undefined {
+    const tasks = this.ensureQwenTasks()
+    const sessionId = this.sessionId
+    if (tasks === undefined || sessionId === undefined) return undefined
+    this.unannouncedSeq += 1
+    const turn = this.createAgentTurn(`unannounced:${String(this.unannouncedSeq)}`, false)
+    if (!this.awaitingAgentTurn && !tasks.wake({ label: scheduledTurnLabel(notification.update) ?? 'Qwen automatic turn' })) return undefined
+    this.agentTurns.push(turn)
+    this.promptToolSnapshots ??= new Map()
+    this.connection?.setAgentTurnActive(sessionId, true)
+    this.notifyAgentTurnWaiters()
+    return turn
+  }
+
+  /** End an unannounced turn after a tool-free model round, or after a long silence. */
+  private trackUnannouncedTurn(turn: AgentTurn, update: AcpSessionNotification['update']): void {
+    if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
+      const status = update.status
+      if (status === 'completed' || status === 'failed') turn.openTools.delete(update.toolCallId)
+      else if (update.sessionUpdate === 'tool_call' || status === 'pending' || status === 'in_progress') turn.openTools.add(update.toolCallId)
+    }
+    if (turn.roundTimer !== undefined) { clearTimeout(turn.roundTimer); turn.roundTimer = undefined }
+    if (turn.idleTimer !== undefined) clearTimeout(turn.idleTimer)
+    const quiet = (): boolean => turn.openTools.size === 0 && this.pendingQuestions === 0
+    if (isUsageChunk(update)) {
+      // Tool calls of that round follow the usage chunk immediately.
+      turn.roundTimer = setTimeout(() => { if (quiet()) this.finishAgentTurn(turn, 'end_turn') }, this.options.unannouncedRoundGraceMs ?? 2_000)
+      turn.roundTimer.unref?.()
+    }
+    const idle = (): void => {
+      if (turn.ended !== undefined) return
+      if (quiet()) this.finishAgentTurn(turn, 'end_turn')
+      else { turn.idleTimer = setTimeout(idle, this.options.unannouncedIdleMs ?? 180_000); turn.idleTimer.unref?.() }
+    }
+    turn.idleTimer = setTimeout(idle, this.options.unannouncedIdleMs ?? 180_000)
+    turn.idleTimer.unref?.()
   }
 
   private async waitForAdoption(): Promise<void> {

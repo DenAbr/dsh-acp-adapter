@@ -105,4 +105,31 @@ describe.skipIf(!LIVE)('live Qwen Code ACP', () => {
     expect(text(adopted).length).toBeGreaterThan(0)
     expect(text(adopted)).not.toContain('background job notice')
   }, 240_000)
+
+  it('adopts a Qwen cron turn (no start/end markers) when the schedule fires', async () => {
+    const jobs: Array<{ label: string; done: Promise<QwenTaskJobOutcome> }> = []
+    const starter: QwenTaskJobStarter = (label, run) => {
+      const hooks = run()
+      jobs.push({ label, done: hooks.done })
+      return { cancel: () => hooks.cancel() }
+    }
+    const live = runtime({ qwenTaskJobs: starter })
+    const first: AcpSessionNotification[] = []
+    await live.prompt(prompt('Use the cron_create tool to schedule a one-shot (non-recurring) task that fires at the next whole minute, with the prompt: "Reply with exactly CRONFIRED". Then reply with exactly SCHEDULED.'), n => { first.push(n) })
+    console.log('first reply:', text(first).trim().slice(-200))
+    const deadline = Date.now() + 150_000
+    let wake: { label: string; done: Promise<QwenTaskJobOutcome> } | undefined
+    while (wake === undefined && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+      wake = jobs.find(job => job.label.startsWith('cron:'))
+    }
+    console.log('wake job:', wake?.label)
+    expect(wake).toBeDefined()
+    expect((await wake!.done).silent).toBe(false)
+    const adopted: AcpSessionNotification[] = []
+    const response = await live.prompt(prompt('cron notice'), n => { adopted.push(n) }, undefined, undefined, { adoptAgentTurn: true })
+    console.log('adopted stop:', response.stopReason, '\nadopted reply:', text(adopted).trim().slice(-300))
+    expect(response.stopReason).toBe('end_turn')
+    expect(text(adopted)).toContain('CRONFIRED')
+  }, 300_000)
 })

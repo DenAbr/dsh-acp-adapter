@@ -70,6 +70,25 @@ async function runBackground(withQuestion) {
   send({ jsonrpc: '2.0', method: '_qwencode/end_turn', params: { sessionId: SESSION, reason: 'end_turn', turnId, source: 'background_notification' } })
 }
 
+// Qwen cron/loop turn: no start/end markers, only the echoed prompt and
+// usage chunks closing each model round.
+async function runCron(respond) {
+  if (respond === undefined) await new Promise(resolve => setTimeout(resolve, 100))
+  const usage = () => update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '' }, _meta: { usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, durationMs: 1 } })
+  update({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'check the build' }, _meta: { source: 'cron' } })
+  text('cron working')
+  usage()
+  // "schedule-inline": Qwen drains cron before answering the prompt.
+  respond?.()
+  update({ sessionUpdate: 'tool_call', toolCallId: 'cron-tool', title: 'Run build', kind: 'execute', status: 'pending', rawInput: { command: 'npm run build' } })
+  update({ sessionUpdate: 'tool_call_update', toolCallId: 'cron-tool', status: 'in_progress' })
+  await new Promise(resolve => setTimeout(resolve, 300))
+  update({ sessionUpdate: 'tool_call_update', toolCallId: 'cron-tool', status: 'completed' })
+  await new Promise(resolve => setTimeout(resolve, 200))
+  text('cron done')
+  usage()
+}
+
 async function onPrompt(message) {
   const prompt = message.params.prompt.map(block => block.text ?? '').join(' ')
   if (prompt.includes('ask') && !prompt.includes('background')) {
@@ -79,8 +98,13 @@ async function onPrompt(message) {
     return
   }
   text(`echo:${prompt}`)
+  if (prompt.includes('schedule-inline')) {
+    void runCron(() => send({ jsonrpc: '2.0', id: message.id, result: { stopReason: 'end_turn' } }))
+    return
+  }
   send({ jsonrpc: '2.0', id: message.id, result: { stopReason: 'end_turn' } })
   if (prompt.includes('background')) void runBackground(prompt.includes('background-ask'))
+  if (prompt.includes('schedule')) void runCron()
 }
 
 process.stdin.on('data', (chunk) => {

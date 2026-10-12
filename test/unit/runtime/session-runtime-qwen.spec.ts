@@ -150,6 +150,44 @@ describe('Qwen Code background tasks', () => {
     expect((await runtime.prompt([{ type: 'text', text: 'hello' }], () => undefined)).stopReason).toBe('end_turn')
   })
 
+  it('adopts an unannounced Qwen cron turn and ends it after a tool-free round', async () => {
+    const jobs = recordingJobs()
+    const runtime = createRuntime({ qwenTaskJobs: jobs.starter, unannouncedRoundGraceMs: 400 })
+    const wake = new Promise<RecordedJob>(resolve => {
+      const poll = setInterval(() => {
+        const job = jobs.jobs.find(candidate => candidate.label.startsWith('cron:'))
+        if (job !== undefined) { clearInterval(poll); resolve(job) }
+      }, 10)
+    })
+    await runtime.prompt([{ type: 'text', text: 'schedule' }], () => undefined)
+    const job = await wake
+    expect(job.label).toBe('cron: check the build')
+    expect(await job.outcome).toMatchObject({ silent: false })
+    const adopted: AcpSessionNotification[] = []
+    const started = Date.now()
+    const response = await runtime.prompt([{ type: 'text', text: 'wake' }], notification => { adopted.push(notification) }, undefined, undefined, { adoptAgentTurn: true })
+    expect(response.stopReason).toBe('end_turn')
+    expect(texts(adopted)).toEqual(expect.arrayContaining(['cron working', 'cron done']))
+    // The first round's usage chunk is followed by a tool call: no early end.
+    expect(adopted.some(n => n.update.sessionUpdate === 'tool_call_update' && n.update.status === 'completed')).toBe(true)
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect((await runtime.prompt([{ type: 'text', text: 'hello' }], () => undefined)).stopReason).toBe('end_turn')
+  })
+
+  it('splits a cron turn that Qwen starts before answering the current prompt', async () => {
+    const jobs = recordingJobs()
+    const runtime = createRuntime({ qwenTaskJobs: jobs.starter, unannouncedRoundGraceMs: 400 })
+    const first: AcpSessionNotification[] = []
+    await runtime.prompt([{ type: 'text', text: 'schedule-inline' }], notification => { first.push(notification) })
+    expect(texts(first)).toEqual(['echo:schedule-inline'])
+    const job = jobs.jobs.find(candidate => candidate.label === 'cron: check the build')
+    expect(job).toBeDefined()
+    const adopted: AcpSessionNotification[] = []
+    const response = await runtime.prompt([{ type: 'text', text: 'wake' }], notification => { adopted.push(notification) }, undefined, undefined, { adoptAgentTurn: true })
+    expect(response.stopReason).toBe('end_turn')
+    expect(texts(adopted)).toEqual(expect.arrayContaining(['cron working', 'cron done']))
+  })
+
   it('falls back to an ordinary prompt when Qwen does not announce a turn', async () => {
     const runtime = createRuntime({ qwenTaskJobs: recordingJobs().starter, agentTurnWaitMs: 50 })
     const updates: AcpSessionNotification[] = []
