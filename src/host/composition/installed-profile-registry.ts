@@ -2,6 +2,7 @@
 /// <reference types="node" />
 
 import { resolveTerminalJobs } from './terminal-jobs.ts'
+import { resolveQwenTaskJobs } from './qwen-task-jobs.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { createTeamBridge, teamBridgeKey } from '../teams/bridge.ts'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
@@ -513,6 +514,7 @@ export function installInstalledProfileRegistry(ctx: Context, config: Config, op
               async () => (await readToolApprovalPolicy(sessionId)).policy, notifyPolicySubscribers),
             sessionId => teamBridgeKey(ctx, sessionId),
             controlsChanged,
+            sessionId => resolveQwenTaskJobs(ctx, sessionId),
           )
           profileAdapters.set(id, routeAdapter)
         }

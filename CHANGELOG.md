@@ -4,6 +4,16 @@
 
 User-facing changes and upgrade notes. See [GitHub Releases](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/releases) for publication dates, exact installation instructions, and checksums. Historical entries were reconstructed from tag diffs; npm packages were not republished.
 
+## 0.1.7-rc.2.4-qwen.1
+
+2026-10-12 · local fork of 0.1.7-rc.2.4 (DSH 0.1.7-rc.2), not published
+
+### English
+
+- Qwen Code `ask_user_question`: questions arrive as `session/request_permission` with `_meta.qwenInteractionKind: user_question`. They now open the native DSH question card (options, multi-select, free text) and answer Qwen with its `answers` field instead of an empty approval. Questions bypass the DSH tool approval policy, so Auto never submits them unanswered.
+- Qwen Code reasoning effort: the probe captures `configOptions` per model (as for Kimi/Codex), so the native picker offers each Qwen model's own `reasoning_effort` values (toggle-only, `none|low|medium|xhigh`, or none).
+- Qwen Code background tasks: running shells, subagents, monitors and workflows are mirrored as native DSH jobs (`acp-qwen-task`; `job_kill` cancels the Qwen task). When Qwen starts its own turn for a finished task (`_qwencode/start_turn`), the job wakes the idle DSH session and the woken turn shows Qwen's live reply, including its questions and approvals, until `_qwencode/end_turn`. Stop cancels that turn; the tasks keep running.
+
 ## 0.1.7-rc.2.4
 
 2026-09-28

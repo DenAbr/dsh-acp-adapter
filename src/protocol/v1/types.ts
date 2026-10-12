@@ -156,6 +156,32 @@ export interface AcpConnectionOptions extends AcpProcessOptions {
   onPermissionRequest?: PermissionRequestHandler
   /** Form/url elicitation handler. If absent, the connection declines fail-closed. */
   onElicitationRequest?: ElicitationRequestHandler
+  /**
+   * Qwen Code private `_qwencode/start_turn` request: the Agent asks before it
+   * starts a turn on its own (background task completion). Absent = the method
+   * is not registered and Qwen falls back to running the turn unannounced.
+   */
+  onQwenTurnStart?: (params: QwenTurnStartParams) => QwenTurnStartResult | Promise<QwenTurnStartResult>
+  /** Qwen Code private `_qwencode/end_turn` notification closing such a turn. */
+  onQwenTurnEnd?: (params: QwenTurnEndParams) => void
+}
+
+/** `_qwencode/start_turn` params (Qwen Code ≥ 0.25, background notification turns). */
+export interface QwenTurnStartParams {
+  readonly sessionId: string
+  readonly source: string
+  readonly turnId: string
+  readonly taskId?: string
+  readonly kind?: string
+  readonly toolUseId?: string
+  readonly label?: string
+}
+export interface QwenTurnStartResult { readonly accepted: boolean }
+export interface QwenTurnEndParams {
+  readonly sessionId: string
+  readonly turnId: string
+  readonly reason?: string
+  readonly source?: string
 }
 
 /** Protocol-side structural face for the per-connection terminal host. */

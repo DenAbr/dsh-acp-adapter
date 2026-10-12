@@ -46,6 +46,9 @@ import { createAcpNativePermissionHandler, type AcpNativeApprovalService } from 
 import { createPermissionCheckAudit } from '../../domain/policy/events.ts'
 import type { AcpPermissionAuditChannel } from '../../domain/policy/permissions.ts'
 import { createAcpNativeElicitationHandler } from '../../domain/policy/elicitation.ts'
+import { createQwenQuestionHandler } from '../../domain/policy/qwen-question.ts'
+import { QWEN_TASK_JOB_KIND, type QwenTaskJobStarter } from '../../runtime/session/qwen-background.ts'
+import type { AcpPromptOptions } from '../../runtime/session/session-runtime.ts'
 import type { AcpNativeUserQuestionService } from '../../domain/policy/elicitation.ts'
 import { isAcpModelOrReasoningOption, normalizeAcpConfigOptionKey } from '../../contract/config-options.ts'
 import { AcpClientError } from '../../protocol/v1/errors.ts'
@@ -292,8 +295,24 @@ export interface AcpProfileRuntime {
   /** ACP session-scoped writes. Implementations must confirm the resulting snapshot. */
   setConfigOption?(configId: string, value: string | boolean, signal?: AbortSignal): Promise<void>
   setMode?(modeId: string, signal?: AbortSignal): Promise<void>
-  prompt(content: acp.ContentBlock[], onUpdate: (notification: AcpSessionNotification) => void, signal?: AbortSignal, onTeamReport?: () => void): Promise<acp.PromptResponse>
+  prompt(content: acp.ContentBlock[], onUpdate: (notification: AcpSessionNotification) => void, signal?: AbortSignal, onTeamReport?: () => void, options?: AcpPromptOptions): Promise<acp.PromptResponse>
   close(): Promise<void>
+}
+
+/**
+ * A step woken only by native completion notices for mirrored Qwen tasks:
+ * Qwen is already running that turn by itself, so the provider call adopts
+ * it instead of sending the notice as a new prompt.
+ */
+export function isQwenTaskWakeStep(messages: readonly import('@deepseek-ai/dsh-llm').UserMessage[]): boolean {
+  if (messages.length === 0) return false
+  let notice = false
+  for (const message of messages) {
+    const source = message.source as { readonly kind?: unknown }
+    if (source.kind === 'user') return false
+    if (source.kind === 'tool-jobs' && message.content.some(block => block.type === 'text' && block.text.includes(`(${QWEN_TASK_JOB_KIND}:`))) notice = true
+  }
+  return notice
 }
 
 /** Host-owned DSH user-question seam resolved for the current DSH session. */
@@ -338,6 +357,7 @@ export class AcpProfileAdapter extends LlmAdapter {
     private readonly createMcpLease?: (sessionId: string, capabilities: acp.AgentCapabilities | undefined, wireProfile?: string) => Promise<import('../../runtime/session/mcp-lease.ts').AcpMcpLease | undefined>,
     private readonly mcpKey?: (sessionId: string) => unknown,
     private readonly controlsChanged?: (sessionId: string) => void,
+    private readonly qwenTaskJobs?: (sessionId: string) => QwenTaskJobStarter | undefined,
   ) {
     super()
     this.ledger = new DispatchLedger(ledgerStore)
@@ -1305,7 +1325,7 @@ export class AcpProfileAdapter extends LlmAdapter {
         // Steering a newly admitted request disables the evidence for this prompt.
         const promptResult = runtime.prompt(prompt, onUpdate, promptSignal, () => {
           if (teammateReportEligible) teammateReportConfirmed = true
-        })
+        }, isQwenTaskWakeStep(messages) ? { adoptAgentTurn: true } : {})
         self.controlsChanged?.(sessionKey)
         const prompting = promptResult.then(async (response: acp.PromptResponse) => {
           remoteSettled = true
@@ -1714,6 +1734,19 @@ export class AcpProfileAdapter extends LlmAdapter {
         await this.sidecar?.append(sessionId as never, { kind: 'permission', time: Date.now(),
           data: createPermissionCheckAudit(check, request.sessionId, request.toolCall.toolCallId) })
       },
+      onQwenQuestion: async (params: acp.RequestPermissionRequest, signal?: AbortSignal): Promise<acp.RequestPermissionResponse> => {
+        const binding = this.resolveQuestions?.(sessionId)
+        if (binding === undefined) return { outcome: { outcome: 'cancelled' } }
+        return await createQwenQuestionHandler({
+          ...(binding.userQuestions === undefined ? {} : { userQuestions: binding.userQuestions }),
+          getAgent: binding.getAgent,
+          ...(this.log === undefined ? {} : { log: this.log }),
+        })(params, signal)
+      },
+      ...(this.qwenTaskJobs === undefined ? {} : (() => {
+        const starter = this.qwenTaskJobs(sessionId)
+        return starter === undefined ? {} : { qwenTaskJobs: starter }
+      })()),
       onElicitationRequest: async (params: acp.CreateElicitationRequest, signal?: AbortSignal, hostToolName?: string, hostToolCall?: acp.ToolCallUpdate): Promise<acp.CreateElicitationResponse> => {
         const binding = this.resolveQuestions?.(sessionId)
         if (binding?.userQuestions === undefined) return { action: 'cancel' }
