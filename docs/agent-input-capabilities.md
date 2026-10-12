@@ -37,6 +37,18 @@ Kimi 的 `@moonshot-ai/kimi-code-sdk` 是 TypeScript/Node Agent SDK，提供会�
 
 普通 prompt 保持互斥，避免一个请求结束时提前清理另一请求的审批状态。权限决策、模型循环、压缩与上下文始终由 Agent 管理。验证方法见 [E2E 指南](../test/e2e/README.md)。
 
+## Agent 主动发起的轮次（Qwen Code）
+
+Qwen Code（`agentInfo.name === "qwen-code"`，已用 0.25.1 验证）可在没有 prompt 的情况下开始轮次：后台任务完成，或 `cron`/`loop` 定时触发。适配器把这类轮次留在 DSH 原生 loop 内，不再在 prompt 结束时结束会话：
+
+- 每次 prompt 结束后通过 `qwen/status/session/tasks` 读取运行中的后台任务，并镜像为 DSH job（`acp-qwen-task`）；停止该 job 会调用 `qwen/control/session/task/cancel`。
+- 没有进行中的 prompt 时，任务完成会让 job 在无人等待的状态下结算，DSH 通过常规 jobs 完成通知唤醒空闲 Agent。该 step 承接 Qwen 用 `_qwencode/start_turn` 宣告、用 `_qwencode/end_turn` 结束的轮次，不把通知作为新 prompt 发送。
+- 定时轮次没有宣告：从 `_meta.source` 为 `cron` 或 `loop` 的 `user_message_chunk` 开始，在最后一个模型回合（`_meta.usage` 或 `executionLifecycle` 的 `ended` 标记）后静默一段时间结束。Qwen 在 prompt 响应之前推送的这类输出也会归入独立轮次。
+- 被承接的轮次与 prompt 一样接受权限请求和 Host 操作。
+- Qwen `ask_user_question` 的问题以带 `_meta.qwenInteractionKind: "user_question"` 的权限请求到达，显示为 DSH 用户问题，答案通过 `answers` 返回。
+
+显式 Stop 发送 `session/cancel`，Qwen 也会因此暂停通知直到下一条用户 prompt。以上均为 Qwen 私有扩展；其他 Agent 保持前述行为。
+
 ## 官方依据
 
 - Codex：[输入操作](https://developers.openai.com/codex/prompting#steering-and-queuing)、[App Server](https://developers.openai.com/codex/app-server#steer-an-active-turn)、[ACP 空闲回退实现](https://github.com/agentclientprotocol/codex-acp/blob/2b48e9822330fc09f3a94a81563e5c4bb779601a/src/CodexAcpServer.ts#L1243)。
