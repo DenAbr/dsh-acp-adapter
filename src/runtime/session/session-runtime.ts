@@ -112,16 +112,26 @@ function isTurnContent(update: AcpSessionNotification['update']): boolean {
     const source = (update as { _meta?: { source?: unknown } })._meta?.source
     return source === 'cron' || source === 'loop'
   }
-  if (kind === 'agent_message_chunk' && isUsageChunk(update)) return false
+  // Empty chunks are Qwen bookkeeping (usage, per-request lifecycle) that can
+  // trail a finished prompt; they never start an automatic turn.
+  if (
+    (kind === 'agent_message_chunk' || kind === 'agent_thought_chunk') &&
+    update.content.type === 'text' &&
+    update.content.text === ''
+  )
+    return false
   return kind === 'agent_message_chunk' || kind === 'agent_thought_chunk' || kind === 'tool_call' || kind === 'tool_call_update' || kind === 'plan'
 }
 
-/** Qwen closes every model round with an empty chunk carrying `_meta.usage`. */
-function isUsageChunk(update: AcpSessionNotification['update']): boolean {
+/** Qwen closes every model round with an empty chunk carrying `_meta.usage`
+ * and/or an `executionLifecycle` marker in phase `ended` (main agent only). */
+function isRoundEnd(update: AcpSessionNotification['update']): boolean {
   if (update.sessionUpdate !== 'agent_message_chunk') return false
-  const meta = (update as { _meta?: { usage?: unknown } })._meta
-  return typeof meta?.usage === 'object' && meta.usage !== null
-    && (update.content.type !== 'text' || update.content.text === '')
+  if (update.content.type === 'text' && update.content.text !== '') return false
+  const meta = (update as { _meta?: { usage?: unknown; executionLifecycle?: unknown } })._meta
+  if (typeof meta?.usage === 'object' && meta.usage !== null) return true
+  const lifecycle = meta?.executionLifecycle as { phase?: unknown; subagentId?: unknown } | undefined
+  return lifecycle?.phase === 'ended' && lifecycle.subagentId === undefined
 }
 
 function scheduledTurnLabel(update: AcpSessionNotification['update']): string | undefined {
@@ -899,7 +909,7 @@ export class AcpSessionRuntime {
     if (turn.roundTimer !== undefined) { clearTimeout(turn.roundTimer); turn.roundTimer = undefined }
     if (turn.idleTimer !== undefined) clearTimeout(turn.idleTimer)
     const quiet = (): boolean => turn.openTools.size === 0 && this.pendingQuestions === 0
-    if (isUsageChunk(update)) {
+    if (isRoundEnd(update)) {
       // Tool calls of that round follow the usage chunk immediately.
       turn.roundTimer = setTimeout(() => { if (quiet()) this.finishAgentTurn(turn, 'end_turn') }, this.options.unannouncedRoundGraceMs ?? 2_000)
       turn.roundTimer.unref?.()

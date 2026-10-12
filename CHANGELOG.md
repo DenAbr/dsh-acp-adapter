@@ -4,9 +4,30 @@
 
 User-facing changes and upgrade notes. See [GitHub Releases](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/releases) for publication dates, exact installation instructions, and checksums. Historical entries were reconstructed from tag diffs; npm packages were not republished.
 
+## 0.1.7-rc.2.4-qwen.2
+
+2026-10-12 · local fork of 0.1.7-rc.2.4 (DSH 0.1.7-rc.2), not published
+
+### 中文
+
+- Qwen 每个 API 请求结束后发出的空 `executionLifecycle` 标记不再开启自动轮次，也会作为模型回合结束标记；此前它可能在 prompt 结束后占用会话，使随后后台任务的 `_qwencode/start_turn` 被拒绝。
+- 真实 Qwen 检查移至 `test/integration/process/qwen-live.spec.ts`，改用 `DSH_E2E_LIVE_QWEN`、`DSH_E2E_LIVE_QWEN_COMMAND` 和 `DSH_E2E_LIVE_QWEN_ENV_KEYS`；Agent 进程只继承系统基础变量和显式列出的变量。
+
+### English
+
+- Empty `executionLifecycle` markers that Qwen sends after each API request no longer start an automatic turn and now count as a model round end. Before, one could hold the session after a prompt, so a later background task `_qwencode/start_turn` was rejected.
+- The real Qwen check moves to `test/integration/process/qwen-live.spec.ts` and uses `DSH_E2E_LIVE_QWEN`, `DSH_E2E_LIVE_QWEN_COMMAND` and `DSH_E2E_LIVE_QWEN_ENV_KEYS`; the Agent process inherits only OS basics and the listed variables.
+
 ## 0.1.7-rc.2.4-qwen.1
 
 2026-10-12 · local fork of 0.1.7-rc.2.4 (DSH 0.1.7-rc.2), not published
+
+### 中文
+
+- Qwen Code `ask_user_question`：问题以带 `_meta.qwenInteractionKind: user_question` 的 `session/request_permission` 到达，现在打开 DSH 原生问题卡片（选项、多选、自定义输入），并通过 `answers` 字段回答，不再返回空批准。问题不经过 DSH 工具审批策略，Auto 不会在未回答时提交。
+- Qwen Code 推理强度：探测按模型记录 `configOptions`（与 Kimi/Codex 相同），原生选择器显示每个 Qwen 模型自己的 `reasoning_effort` 选项。
+- Qwen Code 后台任务：运行中的 shell、子 Agent、monitor 和 workflow 镜像为 DSH 原生 job（`acp-qwen-task`；`job_kill` 取消 Qwen 任务）。Qwen 为已完成任务自行开始轮次（`_qwencode/start_turn`）时，job 唤醒空闲 DSH 会话，被唤醒的轮次实时显示 Qwen 的回复、问题和审批，直到 `_qwencode/end_turn`。Stop 取消该轮次，任务继续运行。
+- Qwen Code cron/loop 轮次（`cron_create`、`/loop`）：Qwen 自行运行且没有开始/结束标记，此前会被丢弃。适配器现在识别回显的定时 prompt，通过原生 job（`cron: <prompt>`）唤醒空闲 DSH 会话，实时显示该轮次（工具、审批、问题），并在一个不启动工具的模型回合后结束。Qwen 在回答当前 prompt 之前开始的定时轮次会从该 prompt 的回复中拆出。
 
 ### English
 

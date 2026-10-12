@@ -103,6 +103,8 @@ async function onPrompt(message) {
     return
   }
   send({ jsonrpc: '2.0', id: message.id, result: { stopReason: 'end_turn' } })
+  // Qwen's per-request lifecycle marker can trail the prompt response.
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '' }, _meta: { executionLifecycle: { v: 1, kind: 'request', executionId: 'e1', sessionId: SESSION, promptId: 'p1', model: 'm', startedAt: 1, phase: 'ended', endedAt: 2, durationMs: 1, outcome: 'success' } } })
   if (prompt.includes('background')) void runBackground(prompt.includes('background-ask'))
   if (prompt.includes('schedule')) void runCron()
 }
