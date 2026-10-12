@@ -93,7 +93,9 @@ function bounded(text: string): string {
 export function qwenTaskCompletion(notification: AcpSessionNotification): { taskId: string; kind?: string; status: QwenTaskJobOutcome['status']; label?: string; text: string } | undefined {
   const update = notification.update as { sessionUpdate?: string; content?: unknown; _meta?: unknown }
   if (update.sessionUpdate !== 'agent_message_chunk' || !plain(update._meta)) return undefined
-  if (update._meta.source !== 'background_task_completed') return undefined
+  // `background_notification` is the same display line re-emitted when Qwen
+  // starts the notification turn; the model's reply is `..._response` (kept).
+  if (update._meta.source !== 'background_task_completed' && update._meta.source !== 'background_notification') return undefined
   const task = update._meta.backgroundTask
   if (!plain(task) || typeof task.taskId !== 'string' || task.taskId.length === 0) return undefined
   const content = update.content
@@ -151,6 +153,9 @@ export class QwenBackgroundTasks {
    */
   complete(completion: NonNullable<ReturnType<typeof qwenTaskCompletion>>, promptActive: boolean): void {
     if (this.closed) return
+    // Started and finished inside the same prompt: Qwen folds it into that
+    // turn and nothing outlives it, so there is nothing to mirror.
+    if (promptActive && !this.tasks.has(completion.taskId)) return
     const task = this.tasks.get(completion.taskId)
       ?? this.mirror(completion.taskId, completion.kind ?? 'agent', completion.label ?? firstLine(completion.text) ?? completion.taskId)
     if (task === undefined || task.settled || task.completion !== undefined) return

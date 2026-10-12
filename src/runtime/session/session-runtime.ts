@@ -438,6 +438,9 @@ export class AcpSessionRuntime {
       const instructions = this.mcpLease?.instructions
       this.wirePromptActive = true
       const prompting = connection.prompt(sessionId, instructions === undefined ? content : [{ type: 'text', text: instructions }, ...content], notification => {
+        // Qwen's discrete "background task completed" line is task state, not
+        // part of the assistant answer; it would otherwise run into the reply.
+        if (qwenTaskCompletion(notification) !== undefined) return
         const update = notification.update
         // Permission snapshots retain the original wire identity; only the presentation callback is normalized.
         const presented = notification.sessionId === sessionId && (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')
