@@ -4,6 +4,26 @@
 
 User-facing changes and upgrade notes. See [GitHub Releases](https://github.com/zaimokuza-yoshiteru/dsh-acp-adapter/releases) for publication dates, exact installation instructions, and checksums. Historical entries were reconstructed from tag diffs; npm packages were not republished.
 
+## 0.2.0-rc.2.9-qwen.1
+
+### 中文
+
+- Qwen Code `ask_user_question` 改为显示 DSH 用户问题卡片，支持单选、多选和自定义输入；答案通过 Qwen 的 `answers` 字段返回。取消或无法解析的问题按取消处理。
+- Qwen Code 的推理强度（`reasoning_effort`）按模型提供选项，切换模型后目录随之更新。
+- 后台任务不再在 prompt 结束后随会话结束：运行中的任务镜像为 DSH job，可在 jobs 面板停止；任务完成后 DSH 唤醒 Agent，并承接 Qwen 自行发起的通知轮次，不重复发送 prompt。
+- 支持 Qwen `cron`/`loop` 定时轮次：输出、工具调用和权限请求进入独立的 DSH 轮次，不再混入当前 prompt 的回复。
+- 以上均为 Qwen 私有扩展，其他 Agent 行为不变。默认跳过的真实 Qwen 检查及范围见 [E2E 指南](test/e2e/README.md)；仅在 Windows、Qwen Code 0.25.1 和 OpenAI 兼容服务上验证。
+- 继续支持 DSH `0.2.0-rc.2`。
+
+### English
+
+- Show Qwen Code `ask_user_question` as a DSH user question card with single choice, multiple choice and custom text. Answers are returned in Qwen's `answers` field. Cancelled or unparseable questions are treated as cancelled.
+- Offer Qwen Code reasoning effort (`reasoning_effort`) per model; the catalogue follows model changes.
+- Background tasks no longer end with the prompt. Running tasks are mirrored as DSH jobs and can be stopped from the jobs panel. When a task finishes, DSH wakes the Agent and adopts the notification turn that Qwen starts by itself, without sending a duplicate prompt.
+- Support Qwen `cron`/`loop` schedule turns. Their output, tool calls and permission requests go into a separate DSH turn instead of the current prompt's reply.
+- These are Qwen-private extensions; other Agents are unchanged. See the [E2E guide](test/e2e/README.md) for the opt-in real Qwen check and its scope. Verified only on Windows with Qwen Code 0.25.1 and an OpenAI-compatible provider.
+- Continue to support DSH `0.2.0-rc.2`.
+
 ## 0.2.0-rc.2.9
 
 ### 中文

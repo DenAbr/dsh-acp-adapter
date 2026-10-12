@@ -37,6 +37,18 @@ Explicit Stop, rejected admission, a provider switch, or unloading terminates su
 
 Ordinary prompts remain mutually exclusive so one request cannot prematurely clear another's approval state. The Agent retains ownership of permissions, its model loop, compaction, and context. See the [E2E guide](../test/e2e/README.md) for verification methods.
 
+## Agent-initiated turns (Qwen Code)
+
+Qwen Code (`agentInfo.name === "qwen-code"`, verified with 0.25.1) can start turns without a prompt: a background task finishes, or a `cron`/`loop` schedule fires. The adapter keeps such turns inside the native DSH loop instead of ending the session at the end of the prompt:
+
+- Running background tasks are read with `qwen/status/session/tasks` after each prompt and mirrored as DSH jobs (`acp-qwen-task`). Stopping the job calls `qwen/control/session/task/cancel`.
+- A completion with no running prompt settles the job without a waiter. DSH then wakes the idle agent through the normal jobs completion notice. That step adopts the turn that Qwen announces with `_qwencode/start_turn` and closes with `_qwencode/end_turn`; the notice is not sent as a new prompt.
+- Schedule turns have no announcement. They start at a `user_message_chunk` with `_meta.source` `cron` or `loop` and end after a quiet period following the last model round (`_meta.usage` or an `executionLifecycle` `ended` marker). Output that Qwen streams before the prompt response is still moved to its own turn.
+- Permission requests and Host operations are accepted during an adopted turn, as during a prompt.
+- Questions from Qwen's `ask_user_question` arrive as permission requests with `_meta.qwenInteractionKind: "user_question"`. They are shown as DSH user questions, and the answers are returned in `answers`.
+
+Explicit Stop sends `session/cancel`, which also pauses Qwen notifications until the next user prompt. These are Qwen-private extensions; other Agents keep the behavior above.
+
 ## Official references
 
 - Codex: [input actions](https://developers.openai.com/codex/prompting#steering-and-queuing), [App Server](https://developers.openai.com/codex/app-server#steer-an-active-turn), [ACP idle fallback](https://github.com/agentclientprotocol/codex-acp/blob/2b48e9822330fc09f3a94a81563e5c4bb779601a/src/CodexAcpServer.ts#L1243).

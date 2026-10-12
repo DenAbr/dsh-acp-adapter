@@ -29,6 +29,15 @@ import { AcpClientError } from '../../protocol/v1/errors.ts'
 import { performance } from 'node:perf_hooks'
 import { generatedContextBlock } from '../text-block-boundary.ts'
 import { ACP_CONFIG_IDENTIFIER_MAX } from '../../contract/config-options.ts'
+import { isQwenUserQuestion } from '../../domain/policy/qwen-question.ts'
+import { RequestError } from '@agentclientprotocol/sdk'
+import type { QwenTurnEndParams, QwenTurnStartParams, QwenTurnStartResult } from '../../protocol/v1/types.ts'
+import {
+  QwenBackgroundTasks,
+  qwenTaskCompletion,
+  qwenTaskSnapshots,
+  type QwenTaskJobStarter,
+} from './qwen-background.ts'
 
 const safeAcpErrorCodes = new Set([
   'ACP_ABORTED',
@@ -153,7 +162,95 @@ export interface AcpSessionRuntimeOptions {
   readonly refreshSessionAfterCancelledPrompt?: boolean
   /** Grace period after `session/cancel` before the Agent process is closed. */
   readonly cancelGraceMs?: number
+  /** Qwen `ask_user_question` bridge (permission request carrying questions + `answers`). */
+  readonly onQwenQuestion?: (
+    params: acp.RequestPermissionRequest,
+    signal?: AbortSignal,
+  ) => Promise<acp.RequestPermissionResponse>
+  /** Host job registry seam. Enables Qwen background-task mirroring and adoption of Qwen-initiated turns. */
+  readonly qwenTaskJobs?: QwenTaskJobStarter
+  /** How long an adopting host call waits for Qwen to announce its turn. */
+  readonly agentTurnWaitMs?: number
+  /** Unannounced (cron) turn: quiet period after a tool-free model round that ends it. */
+  readonly unannouncedRoundGraceMs?: number
+  /** Unannounced (cron) turn: inactivity bound when no round marker arrives. */
+  readonly unannouncedIdleMs?: number
 }
+
+/** Options for one `prompt()` call. */
+export interface AcpPromptOptions {
+  /**
+   * The host turn was woken by a Qwen background-task notice: run the turn
+   * Qwen has started by itself instead of sending `session/prompt`. Falls back
+   * to an ordinary prompt when no such turn is announced in time.
+   */
+  readonly adoptAgentTurn?: boolean
+}
+
+/** One Agent-initiated (Qwen `_qwencode/start_turn`) turn. */
+interface AgentTurn {
+  readonly turnId: string
+  /** false = inferred from out-of-turn updates (Qwen cron/loop turns carry no start/end markers). */
+  readonly announced: boolean
+  readonly buffer: AcpSessionNotification[]
+  listener: ((notification: AcpSessionNotification) => void) | undefined
+  ended: string | undefined
+  readonly endedPromise: Promise<string>
+  readonly end: (reason: string) => void
+  /** Unannounced turns: tool calls not yet terminal, and the end-detection timers. */
+  readonly openTools: Set<string>
+  roundTimer?: ReturnType<typeof setTimeout> | undefined
+  idleTimer?: ReturnType<typeof setTimeout> | undefined
+}
+
+/** Updates that describe Agent work (as opposed to session metadata). */
+function isTurnContent(update: AcpSessionNotification['update']): boolean {
+  const kind = update.sessionUpdate
+  if (kind === 'user_message_chunk') {
+    const source = (update as { _meta?: { source?: unknown } })._meta?.source
+    return source === 'cron' || source === 'loop'
+  }
+  // Empty chunks are Qwen bookkeeping (usage, per-request lifecycle) that can
+  // trail a finished prompt; they never start an automatic turn.
+  if (
+    (kind === 'agent_message_chunk' || kind === 'agent_thought_chunk') &&
+    update.content.type === 'text' &&
+    update.content.text === ''
+  )
+    return false
+  return (
+    kind === 'agent_message_chunk' ||
+    kind === 'agent_thought_chunk' ||
+    kind === 'tool_call' ||
+    kind === 'tool_call_update' ||
+    kind === 'plan'
+  )
+}
+
+/** Qwen closes every model round with an empty chunk carrying `_meta.usage`
+ * and/or an `executionLifecycle` marker in phase `ended` (main agent only). */
+function isRoundEnd(update: AcpSessionNotification['update']): boolean {
+  if (update.sessionUpdate !== 'agent_message_chunk') return false
+  if (update.content.type === 'text' && update.content.text !== '') return false
+  const meta = (update as { _meta?: { usage?: unknown; executionLifecycle?: unknown } })._meta
+  if (typeof meta?.usage === 'object' && meta.usage !== null) return true
+  const lifecycle = meta?.executionLifecycle as { phase?: unknown; subagentId?: unknown } | undefined
+  return lifecycle?.phase === 'ended' && lifecycle.subagentId === undefined
+}
+
+function scheduledTurnLabel(update: AcpSessionNotification['update']): string | undefined {
+  if (update.sessionUpdate !== 'user_message_chunk' || update.content.type !== 'text') return undefined
+  const source = (update as { _meta?: { source?: unknown } })._meta?.source
+  const text = update.content.text.replace(/\s+/g, ' ').trim()
+  const short = text.length > 100 ? `${text.slice(0, 99)}…` : text
+  return `${source === 'loop' ? 'loop' : 'cron'}: ${short === '' ? 'scheduled prompt' : short}`
+}
+
+const AGENT_TURN_BUFFER_MAX = 10_000
+/** Upper bound for an Agent-initiated turn's permission request to wait for host adoption. */
+const AGENT_TURN_ADOPTION_MAX_MS = 60_000
+const ACP_STOP_REASONS = new Set(['end_turn', 'max_tokens', 'max_turn_requests', 'refusal', 'cancelled'])
+const QWEN_AGENT_NAME = 'qwen-code'
 
 /** Transient failure while refreshing an already-settled, cancelled session. */
 export class AcpSessionRefreshRetryError extends Error {
@@ -321,6 +418,21 @@ async function completePermissionToolCall(
   return toolCall
 }
 
+async function raceAbort<T>(pending: Promise<T>, signal: AbortSignal | undefined, onAbort: () => T): Promise<T> {
+  if (signal === undefined) return await pending
+  let listener: (() => void) | undefined
+  const aborted = new Promise<T>((resolve) => {
+    listener = () => resolve(onAbort())
+    if (signal.aborted) listener()
+    else signal.addEventListener('abort', listener, { once: true })
+  })
+  try {
+    return await Promise.race([pending, aborted])
+  } finally {
+    if (listener !== undefined) signal.removeEventListener('abort', listener)
+  }
+}
+
 /** A bounded, detached ACP session configuration snapshot. */
 /** One reusable ACP connection/session, lazily started on the first prompt. */
 export class AcpSessionRuntime {
@@ -478,6 +590,14 @@ export class AcpSessionRuntime {
     }
   }
   private pendingQuestions = 0
+  /** Qwen-initiated turns, oldest first; the last one may still be live. */
+  private agentTurns: AgentTurn[] = []
+  private readonly agentTurnWaiters = new Set<() => void>()
+  /** A host prompt() is waiting to adopt an Agent-initiated turn. */
+  private awaitingAgentTurn = false
+  /** `session/prompt` RPC is on the wire (updates arrive through its listener). */
+  private wirePromptActive = false
+  private qwenTasks: QwenBackgroundTasks | undefined
   get canSteer(): boolean {
     return this.connection?.supportsSteering === true && this.pendingQuestions === 0
   }
@@ -703,6 +823,7 @@ export class AcpSessionRuntime {
     onTeamReport?: () => void,
     onTurnConcluded?: () => void,
     onSuccessfulToolResult?: () => void,
+    promptOptions: AcpPromptOptions = {},
   ): Promise<acp.PromptResponse> {
     if (this.promptClaimed) throw new Error('ACP_PROMPT_ALREADY_ACTIVE')
     // Claim synchronously before the asynchronous local feedback flush. Without
@@ -727,8 +848,13 @@ export class AcpSessionRuntime {
       const sessionId = this.sessionId
       if (connection === undefined || sessionId === undefined) throw new Error('ACP session is not started')
       if (isAborted(signal)) return { stopReason: 'cancelled' }
-      const promptToolSnapshots = new Map<string, acp.ToolCallUpdate>()
-      this.promptToolSnapshots?.clear()
+      // A turn woken by a Qwen background/cron notice runs the turn Qwen has
+      // already started instead of dispatching a new session/prompt.
+      const adoptedTurn = promptOptions.adoptAgentTurn === true ? await this.nextAgentTurn(setupSignal) : undefined
+      if (isAborted(signal)) return { stopReason: 'cancelled' }
+      const promptToolSnapshots =
+        adoptedTurn === undefined ? new Map<string, acp.ToolCallUpdate>() : (this.promptToolSnapshots ?? new Map())
+      if (adoptedTurn === undefined) this.promptToolSnapshots?.clear()
       this.promptToolSnapshots = promptToolSnapshots
       this.promptActive = true
       this.promptAbort = promptAbort
@@ -766,26 +892,39 @@ export class AcpSessionRuntime {
       // in-flight JSON-RPC request poisons the connection. ACP cancellation is a
       // protocol notification followed by a bounded wait for this same prompt.
       const instructions = this.mcpLease?.instructions
-      const prompting = connection.prompt(
-        sessionId,
-        instructions === undefined
-          ? content
-          : [{ type: 'text', text: generatedContextBlock(instructions) }, ...content],
-        (notification) => {
-          const update = notification.update
-          // Permission snapshots retain the original wire identity; only the presentation callback is normalized.
-          const presented =
-            notification.sessionId === sessionId &&
-            (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')
-              ? this.mcpLease?.presentTool?.(update)
-              : undefined
-          onUpdate(
-            presented === undefined
-              ? notification
-              : { ...notification, update: { ...update, ...presented } as typeof update },
-          )
-        },
-      )
+      const deliver = (notification: AcpSessionNotification): void => {
+        const update = notification.update
+        // Permission snapshots retain the original wire identity; only the presentation callback is normalized.
+        const presented =
+          notification.sessionId === sessionId &&
+          (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')
+            ? this.mcpLease?.presentTool?.(update)
+            : undefined
+        onUpdate(
+          presented === undefined
+            ? notification
+            : { ...notification, update: { ...update, ...presented } as typeof update },
+        )
+      }
+      if (adoptedTurn === undefined) this.wirePromptActive = true
+      const prompting =
+        adoptedTurn !== undefined
+          ? this.adoptAgentTurn(connection, adoptedTurn, deliver, signal)
+          : connection.prompt(
+              sessionId,
+              instructions === undefined
+                ? content
+                : [{ type: 'text', text: generatedContextBlock(instructions) }, ...content],
+              (notification) => {
+                // Qwen's discrete "background task completed" line is task state,
+                // not part of the assistant answer.
+                if (qwenTaskCompletion(notification) !== undefined) return
+                // Qwen drains its cron queue before answering session/prompt: from
+                // the echoed scheduled prompt on, the stream belongs to that turn.
+                if (notification.sessionId === sessionId && this.liveAgentTurn()?.announced === false) return
+                deliver(notification)
+              },
+            )
       let settled = false
       void prompting.then(
         () => {
@@ -798,6 +937,8 @@ export class AcpSessionRuntime {
       const onAbort = (): void => {
         if (settled) return
         void connection.cancel(sessionId).catch(() => undefined)
+        // An adopted turn settles itself as cancelled; never close the process for it.
+        if (adoptedTurn !== undefined) return
         void waitWithin(prompting, this.cancelGraceMs).then(
           (response) => {
             if (response !== undefined || settled || this.connection !== connection || connection.isClosed) return
@@ -822,7 +963,10 @@ export class AcpSessionRuntime {
         promptError = error
         throw error
       } finally {
+        this.wirePromptActive = false
         signal?.removeEventListener('abort', onAbort)
+        if (adoptedTurn !== undefined) this.releaseAgentTurn(connection, sessionId, adoptedTurn)
+        void this.ensureQwenTasks()?.refresh()
         // Permission requests are scoped to this prompt, not merely to the
         // process connection. Natural completion must cancel an unresolved host
         // question just as Stop does, before another turn can begin.
@@ -972,6 +1116,11 @@ export class AcpSessionRuntime {
     const connectionAbort = this.connectionAbort
     const operation = (async () => {
       this.promptAbort?.abort(new Error('ACP session runtime closed'))
+      for (const turn of this.agentTurns) turn.end('cancelled')
+      this.agentTurns = []
+      this.notifyAgentTurnWaiters()
+      this.qwenTasks?.close()
+      this.qwenTasks = undefined
       this.promptToolSnapshots?.clear()
       this.promptToolSnapshots = undefined
       connectionAbort?.abort()
@@ -1207,9 +1356,18 @@ export class AcpSessionRuntime {
               }
             },
           }),
+      ...(this.options.qwenTaskJobs === undefined
+        ? {}
+        : {
+            onQwenTurnStart: (params: QwenTurnStartParams) => this.startAgentTurn(params),
+            onQwenTurnEnd: (params: QwenTurnEndParams) => {
+              this.endAgentTurn(params)
+            },
+          }),
       onSessionUpdate: (notification) => {
         if (connectionAbort.signal.aborted) return
         this.stageSessionCreationUpdate(connection, connectionAbort, notification)
+        this.routeAgentTurnUpdate(notification)
         this.applyUpdate(notification)
         this.replayHandler?.(notification)
         this.options.onSessionUpdate?.(notification)
@@ -1298,7 +1456,7 @@ export class AcpSessionRuntime {
       })
     }
     if (
-      this.promptActive &&
+      (this.promptActive || this.liveAgentTurn() !== undefined) &&
       notification.sessionId === this.sessionId &&
       (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')
     ) {
@@ -1330,6 +1488,265 @@ export class AcpSessionRuntime {
     }
   }
 
+  private ensureQwenTasks(): QwenBackgroundTasks | undefined {
+    if (this.qwenTasks !== undefined) return this.qwenTasks
+    const startJob = this.options.qwenTaskJobs
+    const connection = this.connection
+    const sessionId = this.sessionId
+    if (
+      startJob === undefined ||
+      connection === undefined ||
+      sessionId === undefined ||
+      connection.agentInfo?.name !== QWEN_AGENT_NAME
+    )
+      return undefined
+    this.qwenTasks = new QwenBackgroundTasks({
+      startJob,
+      listTasks: async () => {
+        if (connection !== this.connection || connection.isClosed) return undefined
+        return qwenTaskSnapshots(await connection.extRequest('qwen/status/session/tasks', { sessionId }))
+      },
+      cancelTask: async (taskId, taskKind) => {
+        if (connection !== this.connection || connection.isClosed) return
+        await connection.extRequest('qwen/control/session/task/cancel', { sessionId, taskId, taskKind })
+      },
+    })
+    return this.qwenTasks
+  }
+
+  private notifyAgentTurnWaiters(): void {
+    for (const wake of [...this.agentTurnWaiters]) wake()
+  }
+
+  /** Resolve on the next Agent-turn state change or after `ms`. */
+  private agentTurnChange(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const wake = (): void => {
+        if (timer !== undefined) clearTimeout(timer)
+        this.agentTurnWaiters.delete(wake)
+        signal?.removeEventListener('abort', wake)
+        resolve()
+      }
+      timer = setTimeout(wake, Math.max(1, ms))
+      this.agentTurnWaiters.add(wake)
+      signal?.addEventListener('abort', wake, { once: true })
+    })
+  }
+
+  private liveAgentTurn(): AgentTurn | undefined {
+    const last = this.agentTurns.at(-1)
+    return last !== undefined && last.ended === undefined ? last : undefined
+  }
+
+  private startAgentTurn(params: QwenTurnStartParams): QwenTurnStartResult {
+    const notFound = (): never => {
+      throw RequestError.methodNotFound('_qwencode/start_turn')
+    }
+    if (params.sessionId !== this.sessionId) return { accepted: false }
+    // Only background notification turns are adopted; others keep Qwen's own fallback.
+    if (params.source !== 'background_notification') return notFound()
+    // A host prompt owns the session; Qwen retries the notification after it.
+    if (this.promptClaimed && !this.awaitingAgentTurn) return { accepted: false }
+    if (this.liveAgentTurn() !== undefined) return { accepted: false }
+    const tasks = this.ensureQwenTasks()
+    if (tasks === undefined) return notFound()
+    const turn = this.createAgentTurn(params.turnId, true)
+    // A host call already waiting adopts it directly; otherwise the task's
+    // native job settles unawaited and DSH wakes the idle agent.
+    if (!this.awaitingAgentTurn && !tasks.wake(params)) return notFound()
+    this.agentTurns.push(turn)
+    this.promptToolSnapshots ??= new Map()
+    this.connection?.setAgentTurnActive(params.sessionId, true)
+    this.notifyAgentTurnWaiters()
+    return { accepted: true }
+  }
+
+  private createAgentTurn(turnId: string, announced: boolean): AgentTurn {
+    let resolveEnded!: (reason: string) => void
+    const endedPromise = new Promise<string>((resolve) => {
+      resolveEnded = resolve
+    })
+    const turn: AgentTurn = {
+      turnId,
+      announced,
+      buffer: [],
+      listener: undefined,
+      ended: undefined,
+      endedPromise,
+      openTools: new Set(),
+      end: (reason) => {
+        if (turn.ended !== undefined) return
+        turn.ended = reason
+        if (turn.roundTimer !== undefined) clearTimeout(turn.roundTimer)
+        if (turn.idleTimer !== undefined) clearTimeout(turn.idleTimer)
+        resolveEnded(reason)
+      },
+    }
+    return turn
+  }
+
+  private endAgentTurn(params: QwenTurnEndParams): void {
+    if (params.sessionId !== this.sessionId) return
+    const turn = this.agentTurns.find((candidate) => candidate.turnId === params.turnId)
+    if (turn === undefined) return
+    this.finishAgentTurn(turn, params.reason ?? 'end_turn')
+  }
+
+  private finishAgentTurn(turn: AgentTurn, reason: string): void {
+    if (turn.ended !== undefined) return
+    turn.end(reason)
+    const sessionId = this.sessionId
+    if (sessionId !== undefined && this.liveAgentTurn() === undefined)
+      this.connection?.setAgentTurnActive(sessionId, false)
+    if (turn.listener === undefined) {
+      // Not adopted yet: keep a bounded record for the woken host turn only.
+      const stale = setTimeout(() => {
+        if (turn.listener === undefined) this.agentTurns = this.agentTurns.filter((candidate) => candidate !== turn)
+      }, 120_000)
+      stale.unref?.()
+    }
+    this.notifyAgentTurnWaiters()
+  }
+
+  private routeAgentTurnUpdate(notification: AcpSessionNotification): void {
+    if (notification.sessionId !== this.sessionId) return
+    const completion = qwenTaskCompletion(notification)
+    if (completion !== undefined) {
+      this.ensureQwenTasks()?.complete(completion, this.wirePromptActive)
+      return
+    }
+    let turn = this.liveAgentTurn()
+    if (this.wirePromptActive && turn?.announced !== false && scheduledTurnLabel(notification.update) === undefined)
+      return
+    if (turn === undefined) {
+      // Qwen runs cron/loop turns (and announced turns it fell back on) with
+      // no start/end markers. Adopt them like a background turn instead of
+      // dropping their output and failing their approvals. A scheduled echo
+      // may arrive while the finishing prompt is still on the wire.
+      if (this.promptClaimed && !this.awaitingAgentTurn && scheduledTurnLabel(notification.update) === undefined) return
+      if (!isTurnContent(notification.update)) return
+      turn = this.startUnannouncedTurn(notification)
+      if (turn === undefined) return
+    }
+    if (!turn.announced) this.trackUnannouncedTurn(turn, notification.update)
+    if (turn.listener !== undefined) turn.listener(notification)
+    else if (turn.buffer.length < AGENT_TURN_BUFFER_MAX) turn.buffer.push(notification)
+  }
+
+  private unannouncedSeq = 0
+
+  private startUnannouncedTurn(notification: AcpSessionNotification): AgentTurn | undefined {
+    const tasks = this.ensureQwenTasks()
+    const sessionId = this.sessionId
+    if (tasks === undefined || sessionId === undefined) return undefined
+    this.unannouncedSeq += 1
+    const turn = this.createAgentTurn(`unannounced:${String(this.unannouncedSeq)}`, false)
+    if (
+      !this.awaitingAgentTurn &&
+      !tasks.wake({ label: scheduledTurnLabel(notification.update) ?? 'Qwen automatic turn' })
+    )
+      return undefined
+    this.agentTurns.push(turn)
+    this.promptToolSnapshots ??= new Map()
+    this.connection?.setAgentTurnActive(sessionId, true)
+    this.notifyAgentTurnWaiters()
+    return turn
+  }
+
+  /** End an unannounced turn after a tool-free model round, or after a long silence. */
+  private trackUnannouncedTurn(turn: AgentTurn, update: AcpSessionNotification['update']): void {
+    if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
+      const status = update.status
+      if (status === 'completed' || status === 'failed') turn.openTools.delete(update.toolCallId)
+      else if (update.sessionUpdate === 'tool_call' || status === 'pending' || status === 'in_progress')
+        turn.openTools.add(update.toolCallId)
+    }
+    if (turn.roundTimer !== undefined) {
+      clearTimeout(turn.roundTimer)
+      turn.roundTimer = undefined
+    }
+    if (turn.idleTimer !== undefined) clearTimeout(turn.idleTimer)
+    const quiet = (): boolean => turn.openTools.size === 0 && this.pendingQuestions === 0
+    if (isRoundEnd(update)) {
+      // Tool calls of that round follow the usage chunk immediately.
+      turn.roundTimer = setTimeout(() => {
+        if (quiet()) this.finishAgentTurn(turn, 'end_turn')
+      }, this.options.unannouncedRoundGraceMs ?? 2_000)
+      turn.roundTimer.unref?.()
+    }
+    const idle = (): void => {
+      if (turn.ended !== undefined) return
+      if (quiet()) this.finishAgentTurn(turn, 'end_turn')
+      else {
+        turn.idleTimer = setTimeout(idle, this.options.unannouncedIdleMs ?? 180_000)
+        turn.idleTimer.unref?.()
+      }
+    }
+    turn.idleTimer = setTimeout(idle, this.options.unannouncedIdleMs ?? 180_000)
+    turn.idleTimer.unref?.()
+  }
+
+  private async waitForAdoption(): Promise<void> {
+    const deadline = Date.now() + AGENT_TURN_ADOPTION_MAX_MS
+    while (
+      !this.promptActive &&
+      this.liveAgentTurn() !== undefined &&
+      Date.now() < deadline &&
+      this.connection?.isClosed !== true
+    ) {
+      await this.agentTurnChange(Math.min(1_000, deadline - Date.now()))
+    }
+  }
+
+  /** Oldest unadopted Agent turn, waiting briefly for Qwen's announcement. */
+  private async nextAgentTurn(signal: AbortSignal): Promise<AgentTurn | undefined> {
+    const pick = (): AgentTurn | undefined => this.agentTurns.find((turn) => turn.listener === undefined)
+    const deadline = Date.now() + (this.options.agentTurnWaitMs ?? 5_000)
+    this.awaitingAgentTurn = true
+    try {
+      let turn = pick()
+      while (turn === undefined && !signal.aborted && Date.now() < deadline && this.connection?.isClosed !== true) {
+        await this.agentTurnChange(deadline - Date.now(), signal)
+        turn = pick()
+      }
+      return turn
+    } finally {
+      this.awaitingAgentTurn = false
+    }
+  }
+
+  /** Present an Agent-initiated turn as the current prompt until it ends. */
+  private adoptAgentTurn(
+    connection: AcpClientConnection,
+    turn: AgentTurn,
+    deliver: (notification: AcpSessionNotification) => void,
+    signal: AbortSignal | undefined,
+  ): Promise<acp.PromptResponse> {
+    for (const notification of turn.buffer.splice(0)) deliver(notification)
+    turn.listener = deliver
+    this.notifyAgentTurnWaiters()
+    const onAbort = (): void => {
+      if (turn.ended !== undefined) return
+      // session/cancel (sent by the prompt's own abort path) aborts Qwen's
+      // automatic turn; unannounced turns have no end marker to wait for.
+      void waitWithin(turn.endedPromise, Math.max(1, Math.floor(this.cancelGraceMs / 2))).then((reason) => {
+        if (reason === undefined) this.finishAgentTurn(turn, 'cancelled')
+      })
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (isAborted(signal)) onAbort()
+    return Promise.race([turn.endedPromise, connection.failed])
+      .then((reason) => ({ stopReason: (ACP_STOP_REASONS.has(reason) ? reason : 'end_turn') as acp.StopReason }))
+      .finally(() => signal?.removeEventListener('abort', onAbort))
+  }
+
+  private releaseAgentTurn(connection: AcpClientConnection, sessionId: string, turn: AgentTurn): void {
+    turn.listener = () => undefined
+    this.agentTurns = this.agentTurns.filter((candidate) => candidate !== turn)
+    if (this.liveAgentTurn() === undefined) connection.setAgentTurnActive(sessionId, false)
+  }
+
   private permissionSignal(): AbortSignal | undefined {
     const connectionSignal = this.connectionAbort?.signal
     const promptLifetimeSignal = this.promptAbort?.signal
@@ -1344,11 +1761,21 @@ export class AcpSessionRuntime {
 
   private async handlePermissionRequest(params: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse> {
     const cancelled = (): acp.RequestPermissionResponse => ({ outcome: { outcome: 'cancelled' } })
+    // A Qwen-initiated turn may ask before the woken host turn has adopted it.
+    if (!this.promptActive && params.sessionId === this.sessionId && this.liveAgentTurn() !== undefined)
+      await this.waitForAdoption()
     if (!this.promptActive || this.sessionId === undefined || params.sessionId !== this.sessionId) return cancelled()
     const handler = this.options.onPermissionRequest
     if (handler === undefined) return cancelled()
     const signal = this.permissionSignal()
     if (isAborted(signal)) return cancelled()
+    if (isQwenUserQuestion(params)) {
+      // A question is not an approval: never run it through the tool approval
+      // policy (Auto must not "approve" it with an empty answer).
+      const ask = this.options.onQwenQuestion
+      if (ask === undefined) return cancelled()
+      return await raceAbort(ask(params, signal), signal, cancelled)
+    }
     const request = {
       ...params,
       toolCall: await completePermissionToolCall(this.promptToolSnapshots, params.toolCall, signal),
